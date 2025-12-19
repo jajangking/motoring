@@ -63,6 +63,93 @@ export default function OrdersPage() {
     }
   };
 
+  // Fungsi untuk menutup buku otomatis jika tanggal 15 dan belum ditutup
+  const closeBookAutomatically = async (month: number, year: number, period: 'first' | 'second' = 'first') => {
+    try {
+      const startDate = period === 'first'
+        ? new Date(year, month - 1, 1)   // tanggal 1-15
+        : new Date(year, month - 1, 16); // tanggal 16-akhir bulan
+
+      const endDate = period === 'first'
+        ? new Date(year, month - 1, 16)  // sampai 15 (tanggal 16-1 = 15)
+        : new Date(year, month, 1);      // sampai akhir bulan
+
+      // Cek apakah sudah pernah ditutup buku
+      const existingHistory = bookHistory.find(h =>
+        h.period === `${year}-${month.toString().padStart(2, '0')}` &&
+        h.subPeriod === (period === 'first' ? '1-15' : '16-31')
+      );
+
+      if (existingHistory) {
+        return { success: true, message: `Sudah ditutup buku untuk periode ${period === 'first' ? '1-15' : '16-31'}` };
+      }
+
+      const startDateString = startDate.toISOString().split('T')[0];
+      const endDateString = endDate.toISOString().split('T')[0];
+
+      // Filter orders untuk periode ini
+      const ordersForPeriod = orders.filter(order => {
+        const orderDate = new Date(order.tanggal);
+        return orderDate >= startDate && orderDate < endDate;
+      });
+
+      if (ordersForPeriod.length === 0) {
+        return { success: true, message: `Tidak ada orderan untuk periode ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]}` };
+      }
+
+      // Hitung total qty dan nominal untuk setiap label type
+      const result = ordersForPeriod.reduce((acc, order) => {
+        const labelType = order.labelType || 'klik';
+
+        if (!acc.qtyByLabel[labelType]) {
+          acc.qtyByLabel[labelType] = 0;
+        }
+        if (!acc.nominalByLabel[labelType]) {
+          acc.nominalByLabel[labelType] = 0;
+        }
+
+        acc.qtyByLabel[labelType] += order.qty;
+        acc.nominalByLabel[labelType] += order.total;
+        acc.totalQty += order.qty;
+        acc.totalNominal += order.total;
+
+        return acc;
+      }, {
+        qtyByLabel: {} as Record<string, number>,
+        nominalByLabel: {} as Record<string, number>,
+        totalQty: 0,
+        totalNominal: 0
+      });
+
+      // Simpan ke history
+      const historyData = {
+        userId: user?.uid,
+        period: `${year}-${month.toString().padStart(2, '0')}`,
+        subPeriod: period === 'first' ? '1-15' : '16-31',
+        startDate: startDateString,
+        endDate: endDateString,
+        totalOrders: ordersForPeriod.length,
+        qtyByLabel: result.qtyByLabel,
+        nominalByLabel: result.nominalByLabel,
+        totalQty: result.totalQty,
+        totalNominal: result.totalNominal,
+        createdAt: Timestamp.now()
+      };
+
+      // Simpan ke koleksi history di Firebase
+      await addDoc(collection(db, "bookHistory"), historyData);
+
+      return {
+        success: true,
+        message: `Buku untuk periode ${period === 'first' ? '1-15' : '16-31'} ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]} berhasil ditutup`,
+        historyData
+      };
+    } catch (error) {
+      console.error("Error saat menutup buku otomatis:", error);
+      return { success: false, message: "Gagal menutup buku otomatis", error };
+    }
+  };
+
   // Fetch orders from Firebase
   const fetchOrders = async () => {
     if (user) {
@@ -144,6 +231,41 @@ export default function OrdersPage() {
       fetchBookHistory();
     }
   }, [user, authIsLoading]);
+
+  // Tutup buku otomatis saat tanggal 15 dan akhir bulan jika periode belum ditutup
+  useEffect(() => {
+    if (user && !authIsLoading && orders.length > 0 && bookHistory) {
+      const now = new Date();
+      const currentDay = now.getDate();
+      const currentMonth = now.getMonth() + 1;
+      const currentYear = now.getFullYear();
+
+      // Jika tanggal 15 dan periode 1-15 bulan ini belum ditutup, maka tutup otomatis
+      if (currentDay === 15) {
+        const isPeriodClosed15 = bookHistory.some(h =>
+          h.period === `${currentYear}-${currentMonth.toString().padStart(2, '0')}` &&
+          h.subPeriod === '1-15'
+        );
+
+        if (!isPeriodClosed15) {
+          closeBookAutomatically(currentMonth, currentYear, 'first');
+        }
+      }
+
+      // Jika tanggal adalah hari terakhir bulan dan periode 16-akhir bulan ini belum ditutup, maka tutup otomatis
+      const lastDayOfMonth = new Date(currentYear, currentMonth - 1, 0).getDate(); // Perbaikan: bulan - 1 karena bulan dimulai dari 0
+      if (currentDay === lastDayOfMonth) {
+        const isPeriodClosedEnd = bookHistory.some(h =>
+          h.period === `${currentYear}-${currentMonth.toString().padStart(2, '0')}` &&
+          h.subPeriod === '16-31'
+        );
+
+        if (!isPeriodClosedEnd) {
+          closeBookAutomatically(currentMonth, currentYear, 'second');
+        }
+      }
+    }
+  }, [user, authIsLoading, orders, bookHistory]);
 
   if (isLoading || authIsLoading) {
     return (
