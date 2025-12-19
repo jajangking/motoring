@@ -73,12 +73,12 @@ export default function OilChangePage() {
           </li>
           <li>
             <a href="/oil-change" className="flex flex-col items-center text-redbull-red font-semibold">
-              <span>Ganti Oli</span>
+              <span>Sparepart</span>
             </a>
           </li>
           <li>
-            <a href="/spareparts" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Sparepart</span>
+            <a href="/orders" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+              <span>Orderan</span>
             </a>
           </li>
           <li>
@@ -87,7 +87,7 @@ export default function OilChangePage() {
             </a>
           </li>
           <li>
-            <button 
+            <button
               onClick={async () => {
                 try {
                   await logout();

@@ -77,8 +77,8 @@ export default function SparepartsPage() {
             </a>
           </li>
           <li>
-            <a href="/spareparts" className="flex flex-col items-center text-redbull-red font-semibold">
-              <span>Sparepart</span>
+            <a href="/orders" className="flex flex-col items-center text-redbull-red font-semibold">
+              <span>Orderan</span>
             </a>
           </li>
           <li>
@@ -87,7 +87,7 @@ export default function SparepartsPage() {
             </a>
           </li>
           <li>
-            <button 
+            <button
               onClick={async () => {
                 try {
                   await logout();
