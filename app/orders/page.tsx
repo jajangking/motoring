@@ -7,6 +7,21 @@ import { db } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 
 export default function OrdersPage() {
+  // Fungsi untuk mendapatkan bulan saat ini dalam format YYYY-MM
+  const getCurrentMonth = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  };
+
+  // Fungsi untuk mendapatkan periode saat ini (1-15 atau 16-31)
+  const getCurrentPeriod = () => {
+    const now = new Date();
+    const day = now.getDate();
+    return day <= 15 ? '1-15' : '16-31';
+  };
+
   const [isLoading, setIsLoading] = useState(true);
   const [orderData, setOrderData] = useState({
     qty: '',
@@ -15,142 +30,59 @@ export default function OrdersPage() {
     note: '',
     labelType: 'klik' // Tambahkan state untuk jenis label
   });
-  const [bookHistory, setBookHistory] = useState<any[]>([]);
-  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
-  const [closedOrders, setClosedOrders] = useState<any[]>([]);
-  const [showClosedOrders, setShowClosedOrders] = useState<{period: string, subPeriod: string} | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [error, setError] = useState('');
   const [isPopupOpen, setIsPopupOpen] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<any[]>([]); // Orders not in closed periods
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
+  const [bookHistory, setBookHistory] = useState<any[]>([]); // Store book history for filtering out closed periods
   const { user, isLoading: authIsLoading, logout } = useAuth();
   const router = useRouter();
 
-  // Fungsi untuk mengambil history tutup buku dari Firebase
-  const fetchBookHistory = async () => {
-    if (user) {
-      setIsHistoryLoading(true);
-      try {
-        const q = query(
-          collection(db, "bookHistory"),
-          where("userId", "==", user.uid),
-          orderBy("createdAt", "desc")
-        );
-        const querySnapshot = await getDocs(q);
+  // Initialize filters with current month and period
+  const [monthFilter, setMonthFilter] = useState<string>(getCurrentMonth()); // Filter by month (YYYY-MM format)
+  const [periodFilter, setPeriodFilter] = useState<'all' | '1-15' | '16-31'>(getCurrentPeriod()); // Filter by period
+  const [showExportPreview, setShowExportPreview] = useState(false); // State for showing export preview
+  const [exportText, setExportText] = useState(''); // State to store the export text
+  const [exportFormat, setExportFormat] = useState<'basic' | 'withRupiah'>('basic'); // State for export format
 
-        const historyList = querySnapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            period: data.period,
-            startDate: data.startDate,
-            endDate: data.endDate,
-            totalOrders: data.totalOrders,
-            qtyByLabel: data.qtyByLabel,
-            createdAt: data.createdAt
-          };
-        });
-
-        setBookHistory(historyList);
-      } catch (err) {
-        console.error("Error fetching book history: ", err);
-      } finally {
-        setIsHistoryLoading(false);
-      }
-    }
+  // Function to check if an order is in a closed book period
+  const isOrderInClosedPeriod = (orderDate: string) => {
+    const orderDateTime = new Date(orderDate);
+    return bookHistory.some(history => {
+      const startDate = new Date(history.startDate);
+      const endDate = new Date(history.endDate);
+      // Check if order date is within the closed period (end date is exclusive)
+      return orderDateTime >= startDate && orderDateTime < endDate;
+    });
   };
 
-  // Fungsi untuk menutup buku otomatis jika tanggal 15 dan belum ditutup
-  const closeBookAutomatically = async (month: number, year: number, period: 'first' | 'second' = 'first') => {
-    try {
-      const startDate = period === 'first'
-        ? new Date(year, month - 1, 1)   // tanggal 1-15
-        : new Date(year, month - 1, 16); // tanggal 16-akhir bulan
+  // Function to get unique months from orders
+  const getAvailableMonths = () => {
+    if (!orders || orders.length === 0) return [];
 
-      const endDate = period === 'first'
-        ? new Date(year, month - 1, 16)  // sampai 15 (tanggal 16-1 = 15)
-        : new Date(year, month, 1);      // sampai akhir bulan
+    const monthsSet = new Set();
+    orders.forEach(order => {
+      const date = new Date(order.tanggal);
+      const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      monthsSet.add(monthYear);
+    });
 
-      // Cek apakah sudah pernah ditutup buku
-      const existingHistory = bookHistory.find(h =>
-        h.period === `${year}-${month.toString().padStart(2, '0')}` &&
-        h.subPeriod === (period === 'first' ? '1-15' : '16-31')
-      );
-
-      if (existingHistory) {
-        return { success: true, message: `Sudah ditutup buku untuk periode ${period === 'first' ? '1-15' : '16-31'}` };
-      }
-
-      const startDateString = startDate.toISOString().split('T')[0];
-      const endDateString = endDate.toISOString().split('T')[0];
-
-      // Filter orders untuk periode ini
-      const ordersForPeriod = orders.filter(order => {
-        const orderDate = new Date(order.tanggal);
-        return orderDate >= startDate && orderDate < endDate;
-      });
-
-      if (ordersForPeriod.length === 0) {
-        return { success: true, message: `Tidak ada orderan untuk periode ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]}` };
-      }
-
-      // Hitung total qty dan nominal untuk setiap label type
-      const result = ordersForPeriod.reduce((acc, order) => {
-        const labelType = order.labelType || 'klik';
-
-        if (!acc.qtyByLabel[labelType]) {
-          acc.qtyByLabel[labelType] = 0;
-        }
-        if (!acc.nominalByLabel[labelType]) {
-          acc.nominalByLabel[labelType] = 0;
-        }
-
-        acc.qtyByLabel[labelType] += order.qty;
-        acc.nominalByLabel[labelType] += order.total;
-        acc.totalQty += order.qty;
-        acc.totalNominal += order.total;
-
-        return acc;
-      }, {
-        qtyByLabel: {} as Record<string, number>,
-        nominalByLabel: {} as Record<string, number>,
-        totalQty: 0,
-        totalNominal: 0
-      });
-
-      // Simpan ke history
-      const historyData = {
-        userId: user?.uid,
-        period: `${year}-${month.toString().padStart(2, '0')}`,
-        subPeriod: period === 'first' ? '1-15' : '16-31',
-        startDate: startDateString,
-        endDate: endDateString,
-        totalOrders: ordersForPeriod.length,
-        qtyByLabel: result.qtyByLabel,
-        nominalByLabel: result.nominalByLabel,
-        totalQty: result.totalQty,
-        totalNominal: result.totalNominal,
-        createdAt: Timestamp.now()
-      };
-
-      // Simpan ke koleksi history di Firebase
-      await addDoc(collection(db, "bookHistory"), historyData);
-
-      return {
-        success: true,
-        message: `Buku untuk periode ${period === 'first' ? '1-15' : '16-31'} ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]} berhasil ditutup`,
-        historyData
-      };
-    } catch (error) {
-      console.error("Error saat menutup buku otomatis:", error);
-      return { success: false, message: "Gagal menutup buku otomatis", error };
-    }
+    // Sort months in descending order (most recent first)
+    return Array.from(monthsSet).sort((a, b) => {
+      const [yearA, monthA] = a.split('-').map(Number);
+      const [yearB, monthB] = b.split('-').map(Number);
+      if (yearA !== yearB) return yearB - yearA;
+      return monthB - monthA;
+    });
   };
 
-  // Fetch orders from Firebase
+
+
+  // Fetch orders and book history from Firebase
   const fetchOrders = async () => {
     if (user) {
       setIsFetching(true); // Set fetching state
@@ -190,8 +122,21 @@ export default function OrdersPage() {
           return order;
         }).sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime()); // Urutkan di sisi client dari terbaru
 
+        // Fetch book history
+        const historyQuery = query(collection(db, "bookHistory"), orderBy("startDate", "desc"));
+        const historySnapshot = await getDocs(historyQuery);
+        const historyList = historySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setBookHistory(historyList);
+
+        // Filter out orders that are in closed periods
+        const filteredOrders = fetchedOrders.filter(order => !isOrderInClosedPeriod(order.tanggal));
+
         console.log("Setting orders state to:", fetchedOrders);
         setOrders(fetchedOrders);
+        setFilteredOrders(filteredOrders); // Set filtered orders (orders not in closed periods)
         setError(''); // Clear any previous errors
       } catch (err) {
         console.error("Error fetching orders: ", err);
@@ -226,46 +171,6 @@ export default function OrdersPage() {
   }, [orders]);
 
   // Fetch book history when user changes or component mounts
-  useEffect(() => {
-    if (user && !authIsLoading) {
-      fetchBookHistory();
-    }
-  }, [user, authIsLoading]);
-
-  // Tutup buku otomatis saat tanggal 15 dan akhir bulan jika periode belum ditutup
-  useEffect(() => {
-    if (user && !authIsLoading && orders.length > 0 && bookHistory) {
-      const now = new Date();
-      const currentDay = now.getDate();
-      const currentMonth = now.getMonth() + 1;
-      const currentYear = now.getFullYear();
-
-      // Jika tanggal 15 dan periode 1-15 bulan ini belum ditutup, maka tutup otomatis
-      if (currentDay === 15) {
-        const isPeriodClosed15 = bookHistory.some(h =>
-          h.period === `${currentYear}-${currentMonth.toString().padStart(2, '0')}` &&
-          h.subPeriod === '1-15'
-        );
-
-        if (!isPeriodClosed15) {
-          closeBookAutomatically(currentMonth, currentYear, 'first');
-        }
-      }
-
-      // Jika tanggal adalah hari terakhir bulan dan periode 16-akhir bulan ini belum ditutup, maka tutup otomatis
-      const lastDayOfMonth = new Date(currentYear, currentMonth - 1, 0).getDate(); // Perbaikan: bulan - 1 karena bulan dimulai dari 0
-      if (currentDay === lastDayOfMonth) {
-        const isPeriodClosedEnd = bookHistory.some(h =>
-          h.period === `${currentYear}-${currentMonth.toString().padStart(2, '0')}` &&
-          h.subPeriod === '16-31'
-        );
-
-        if (!isPeriodClosedEnd) {
-          closeBookAutomatically(currentMonth, currentYear, 'second');
-        }
-      }
-    }
-  }, [user, authIsLoading, orders, bookHistory]);
 
   if (isLoading || authIsLoading) {
     return (
@@ -305,7 +210,8 @@ export default function OrdersPage() {
         tarif: orderData.tarif,
         tanggal: orderData.tanggal,
         total: orderData.total,
-        note: orderData.note
+        note: orderData.note || '',
+        labelType: orderData.labelType || 'klik'
       };
       console.log("New order with ID added to state:", newOrderWithId);
       setOrders(prevOrders => [newOrderWithId, ...prevOrders]); // Add to the beginning
@@ -352,6 +258,9 @@ export default function OrdersPage() {
         )
       );
       console.log("Order updated in state, new orders state:", setOrders);
+
+      // Refresh orders to trigger filtering
+      await fetchOrders();
     } catch (err) {
       console.error("Error updating order: ", err);
       throw err;
@@ -371,6 +280,9 @@ export default function OrdersPage() {
       // Remove from local state
       setOrders(prevOrders => prevOrders.filter(order => order.id !== orderId));
       console.log("Order deleted from state, new orders state:", setOrders);
+
+      // Refresh orders to trigger filtering
+      await fetchOrders();
     } catch (err) {
       console.error("Error deleting order: ", err);
       throw err;
@@ -444,6 +356,9 @@ export default function OrdersPage() {
       setIsPopupOpen(false);
       setEditingOrderId(null);
 
+      // Refresh orders to trigger filtering
+      await fetchOrders();
+
       // Clear success message after delay
       setTimeout(() => {
         setSuccessMessage('');
@@ -456,137 +371,8 @@ export default function OrdersPage() {
     }
   };
 
-  // Fungsi untuk mengambil orderan berdasarkan periode tutup buku
-  const fetchOrdersForPeriod = async (period: string, subPeriod: '1-15' | '16-31') => {
-    if (!user) return [];
-
-    const [year, month] = period.split('-').map(Number);
-
-    const startDate = subPeriod === '1-15'
-      ? new Date(year, month - 1, 1)
-      : new Date(year, month - 1, 16);
-
-    const endDate = subPeriod === '1-15'
-      ? new Date(year, month - 1, 16)  // 16 - 1 hari = 15
-      : new Date(year, month, 0);      // akhir bulan
-
-    const startDateString = startDate.toISOString().split('T')[0];
-    const endDateString = endDate.toISOString().split('T')[0];
-
-    try {
-      const q = query(
-        collection(db, "orders"),
-        where("userId", "==", user.uid),
-        where("tanggal", ">=", startDateString),
-        where("tanggal", "<", endDateString)
-      );
-
-      const querySnapshot = await getDocs(q);
-
-      const periodOrders = querySnapshot.docs.map(doc => {
-        const data = doc.data();
-        let tanggalFormatted = data.tanggal;
-        if (data.tanggal instanceof Timestamp) {
-          tanggalFormatted = data.tanggal.toDate().toISOString().split('T')[0];
-        } else if (typeof data.tanggal === 'string') {
-          tanggalFormatted = data.tanggal;
-        }
-
-        return {
-          id: doc.id,
-          qty: data.qty || 0,
-          tarif: data.tarif || 0,
-          tanggal: tanggalFormatted,
-          total: data.total || 0,
-          note: data.note || '',
-          labelType: data.labelType || 'klik'
-        };
-      }).sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime());
-
-      return periodOrders;
-    } catch (error) {
-      console.error("Error fetching orders for period:", error);
-      return [];
-    }
-  };
 
   // Function to open edit form with existing order data
-  // Fungsi untuk menutup buku (dari tanggal 1-15 setiap bulan)
-  const closeBook = async (month: number, year: number, period: 'first' | 'second' = 'first') => {
-    try {
-      const startDate = period === 'first'
-        ? new Date(year, month - 1, 1)   // tanggal 1-15
-        : new Date(year, month - 1, 16); // tanggal 16-akhir bulan
-
-      const endDate = period === 'first'
-        ? new Date(year, month - 1, 16)  // sampai 15 (tanggal 16-1 = 15)
-        : new Date(year, month, 1);      // sampai akhir bulan
-
-      const startDateString = startDate.toISOString().split('T')[0];
-      const endDateString = endDate.toISOString().split('T')[0];
-
-      // Filter orders untuk periode ini
-      const ordersForPeriod = orders.filter(order => {
-        const orderDate = new Date(order.tanggal);
-        return orderDate >= startDate && orderDate < endDate;
-      });
-
-      if (ordersForPeriod.length === 0) {
-        return { success: false, message: `Tidak ada orderan untuk periode ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]}` };
-      }
-
-      // Hitung total qty dan nominal untuk setiap label type
-      const result = ordersForPeriod.reduce((acc, order) => {
-        const labelType = order.labelType || 'klik';
-
-        if (!acc.qtyByLabel[labelType]) {
-          acc.qtyByLabel[labelType] = 0;
-        }
-        if (!acc.nominalByLabel[labelType]) {
-          acc.nominalByLabel[labelType] = 0;
-        }
-
-        acc.qtyByLabel[labelType] += order.qty;
-        acc.nominalByLabel[labelType] += order.total;
-        acc.totalQty += order.qty;
-        acc.totalNominal += order.total;
-
-        return acc;
-      }, {
-        qtyByLabel: {} as Record<string, number>,
-        nominalByLabel: {} as Record<string, number>,
-        totalQty: 0,
-        totalNominal: 0
-      });
-
-      // Simpan ke history
-      const historyData = {
-        userId: user?.uid,
-        period: `${year}-${month.toString().padStart(2, '0')}`,
-        subPeriod: period === 'first' ? '1-15' : '16-31',
-        startDate: startDateString,
-        endDate: endDateString,
-        totalOrders: ordersForPeriod.length,
-        qtyByLabel: result.qtyByLabel,
-        nominalByLabel: result.nominalByLabel,
-        totalQty: result.totalQty,
-        totalNominal: result.totalNominal,
-        createdAt: Timestamp.now()
-      };
-
-      // Simpan ke koleksi history di Firebase
-      await addDoc(collection(db, "bookHistory"), historyData);
-
-      return {
-        success: true,
-        message: `Buku untuk periode ${period === 'first' ? '1-15' : '16-31'} ${startDateString} - ${new Date(endDate.getTime() - 86400000).toISOString().split('T')[0]} berhasil ditutup`,
-        historyData
-      };
-    } catch (error) {
-      console.error("Error saat menutup buku:", error);
-      return { success: false, message: "Gagal menutup buku", error };
-    }
-  };
 
   // Fungsi untuk menghapus orderan berdasarkan periode (opsional)
   const deleteOrdersForPeriod = async (startDate: Date, endDate: Date) => {
@@ -605,6 +391,9 @@ export default function OrdersPage() {
     });
 
     await batch.commit();
+
+    // Refresh orders to trigger filtering
+    await fetchOrders();
   };
 
   const openEditForm = (order: any) => {
@@ -617,6 +406,249 @@ export default function OrdersPage() {
     });
     setEditingOrderId(order.id);
     setIsPopupOpen(true);
+  };
+
+  // Function to format currency
+  const formatCurrency = (amount: number): string => {
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0
+    }).format(amount);
+  };
+
+  // Function to generate basic export text based on current filters
+  const generateBasicExportText = () => {
+    // Apply month and period filters to get displayed orders for export
+    let displayedOrders = [...filteredOrders];
+
+    // Apply month filter
+    if (monthFilter !== 'all') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        const orderMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        return orderMonth === monthFilter;
+      });
+    }
+
+    // Apply period filter
+    if (periodFilter === '1-15') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        return date.getDate() >= 1 && date.getDate() <= 15;
+      });
+    } else if (periodFilter === '16-31') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        return date.getDate() >= 16 && date.getDate() <= 31;
+      });
+    }
+
+    // Get month name for display
+    const [year, month] = monthFilter.split('-').map(Number);
+    const monthNames = [
+      'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI',
+      'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'
+    ];
+    const monthName = monthNames[month - 1] || 'BULAN';
+
+    // Format the export text
+    let exportText = `*REKAP ANTARAN*\n`;
+    exportText += `*DELIMAN HL*\n`;
+    exportText += `*${monthName} TGL ${periodFilter}*\n\n`;
+
+    exportText += `NAMA : Jajang Nurdiana\n`;
+    exportText += `NIK : 3207103103000001\n`;
+    exportText += `NIK DMS : 32071031\n\n`;
+
+    // Create array for each day of the period
+    const daysInPeriod = periodFilter === '1-15' ? 15 : 16; // For 1-15 or 16-31
+    const startDate = periodFilter === '1-15' ? 1 : 16;
+
+    // Initialize arrays for klik and paket
+    const klikArray = new Array(daysInPeriod).fill(null);
+    const paketArray = new Array(daysInPeriod).fill(null);
+
+    // Fill the arrays with actual data
+    displayedOrders.forEach(order => {
+      const date = new Date(order.tanggal);
+      const day = date.getDate();
+
+      if ((periodFilter === '1-15' && day >= 1 && day <= 15) ||
+          (periodFilter === '16-31' && day >= 16 && day <= 31)) {
+
+        const dayIndex = periodFilter === '1-15' ? day - 1 : day - 16;
+
+        if (order.labelType === 'klik') {
+          klikArray[dayIndex] = order.qty;
+        } else if (order.labelType === 'paket') {
+          paketArray[dayIndex] = order.qty;
+        }
+      }
+    });
+
+    // Add daily data to export text
+    exportText += `TGL_KLIK_PAKET\n`;
+    for (let i = 0; i < daysInPeriod; i++) {
+      const day = startDate + i;
+      const klikValue = klikArray[i] !== null ? klikArray[i] : '';
+      const paketValue = paketArray[i] !== null ? paketArray[i] : '';
+      exportText += `${day}.${klikValue}_${paketValue}\n`;
+    }
+
+    // Calculate totals
+    const totalKlik = displayedOrders
+      .filter(order => order.labelType === 'klik')
+      .reduce((sum, order) => sum + order.qty, 0);
+
+    const totalPaket = displayedOrders
+      .filter(order => order.labelType === 'paket')
+      .reduce((sum, order) => sum + order.qty, 0);
+
+    const totalAntaran = totalKlik + totalPaket;
+
+    // Format total section at the very bottom
+    exportText += `\nTOTAL ANTARAN QTY: ${totalAntaran}\n`;
+    exportText += `KLIK QTY: ${totalKlik}\n`;
+    exportText += `PAKET QTY: ${totalPaket}`;
+
+    return exportText;
+  };
+
+  // Function to generate export text with rupiah based on current filters
+  const generateExportTextWithRupiah = () => {
+    // Apply month and period filters to get displayed orders for export
+    let displayedOrders = [...filteredOrders];
+
+    // Apply month filter
+    if (monthFilter !== 'all') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        const orderMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        return orderMonth === monthFilter;
+      });
+    }
+
+    // Apply period filter
+    if (periodFilter === '1-15') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        return date.getDate() >= 1 && date.getDate() <= 15;
+      });
+    } else if (periodFilter === '16-31') {
+      displayedOrders = displayedOrders.filter(order => {
+        const date = new Date(order.tanggal);
+        return date.getDate() >= 16 && date.getDate() <= 31;
+      });
+    }
+
+    // Get month name for display
+    const [year, month] = monthFilter.split('-').map(Number);
+    const monthNames = [
+      'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI',
+      'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'
+    ];
+    const monthName = monthNames[month - 1] || 'BULAN';
+
+    // Format the export text
+    let exportText = `*REKAP ANTARAN*\n`;
+    exportText += `*DELIMAN HL*\n`;
+    exportText += `*${monthName} TGL ${periodFilter}*\n\n`;
+
+    exportText += `NAMA : Jajang Nurdiana\n`;
+    exportText += `NIK : 3207103103000001\n`;
+    exportText += `NIK DMS : 32071031\n\n`;
+
+    // Create array for each day of the period
+    const daysInPeriod = periodFilter === '1-15' ? 15 : 16; // For 1-15 or 16-31
+    const startDate = periodFilter === '1-15' ? 1 : 16;
+
+    // Initialize arrays for klik and paket
+    const klikArray = new Array(daysInPeriod).fill(null);
+    const paketArray = new Array(daysInPeriod).fill(null);
+
+    // Fill the arrays with actual data
+    displayedOrders.forEach(order => {
+      const date = new Date(order.tanggal);
+      const day = date.getDate();
+
+      if ((periodFilter === '1-15' && day >= 1 && day <= 15) ||
+          (periodFilter === '16-31' && day >= 16 && day <= 31)) {
+
+        const dayIndex = periodFilter === '1-15' ? day - 1 : day - 16;
+
+        if (order.labelType === 'klik') {
+          klikArray[dayIndex] = order.qty;
+        } else if (order.labelType === 'paket') {
+          paketArray[dayIndex] = order.qty;
+        }
+      }
+    });
+
+    // Add daily data to export text (simplified format)
+    exportText += `TGL_KLIK_PAKET\n`;
+    for (let i = 0; i < daysInPeriod; i++) {
+      const day = startDate + i;
+      const klikValue = klikArray[i] !== null ? klikArray[i] : '';
+      const paketValue = paketArray[i] !== null ? paketArray[i] : '';
+      exportText += `${day}.${klikValue}_${paketValue}\n`;
+    }
+
+    // Calculate totals with rupiah
+    const totalKlikQty = displayedOrders
+      .filter(order => order.labelType === 'klik')
+      .reduce((sum, order) => sum + order.qty, 0);
+
+    const totalPaketQty = displayedOrders
+      .filter(order => order.labelType === 'paket')
+      .reduce((sum, order) => sum + order.qty, 0);
+
+    const totalKlikNominal = displayedOrders
+      .filter(order => order.labelType === 'klik')
+      .reduce((sum, order) => sum + order.total, 0);
+
+    const totalPaketNominal = displayedOrders
+      .filter(order => order.labelType === 'paket')
+      .reduce((sum, order) => sum + order.total, 0);
+
+    const totalAntaranQty = totalKlikQty + totalPaketQty;
+    const totalAntaranNominal = totalKlikNominal + totalPaketNominal;
+
+    // Format total section at the very bottom
+    exportText += `\nTOTAL ANTARAN QTY: ${totalAntaranQty}\n`;
+    exportText += `TOTAL ANTARAN NOMINAL: ${formatCurrency(totalAntaranNominal)}\n`;
+    exportText += `KLIK QTY: ${totalKlikQty} | NOMINAL: ${formatCurrency(totalKlikNominal)}\n`;
+    exportText += `PAKET QTY: ${totalPaketQty} | NOMINAL: ${formatCurrency(totalPaketNominal)}`;
+
+    return exportText;
+  };
+
+  // Function to generate export text based on current format selection
+  const generateExportText = () => {
+    if (exportFormat === 'withRupiah') {
+      return generateExportTextWithRupiah();
+    } else {
+      return generateBasicExportText();
+    }
+  };
+
+  // Function to show export preview
+  const showExportPreviewHandler = () => {
+    const text = generateExportText();
+    setExportText(text);
+    setShowExportPreview(true);
+  };
+
+  // Function to copy export text to clipboard
+  const copyExportText = () => {
+    navigator.clipboard.writeText(exportText)
+      .then(() => {
+        alert('Data berhasil disalin ke clipboard!');
+      })
+      .catch(err => {
+        console.error('Failed to copy text: ', err);
+        alert('Gagal menyalin data ke clipboard');
+      });
   };
 
   return (
@@ -650,488 +682,435 @@ export default function OrdersPage() {
         </button>
       </header>
 
-      <main className="max-w-full mx-auto py-8 px-0 text-center flex-grow">
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 border border-redbull-red/30">
-          <h2 className="text-3xl font-bold text-white mb-6 px-6">Daftar Orderan per Hari</h2>
+      {/* Filter Section */}
+      <div className="bg-redbull-darker/60 border-b border-redbull-red/30 py-4 px-6">
+        <div className="max-w-4xl mx-auto">
+          <div className="flex flex-col items-center gap-3">
+            {/* Month Filter Dropdown */}
+            <div className="w-full max-w-xs">
+              <label className="block text-xs text-redbull-light mb-1">Pilih Bulan</label>
+              <select
+                value={monthFilter}
+                onChange={(e) => setMonthFilter(e.target.value)}
+                className="w-full bg-redbull-darker/50 border border-redbull-light/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-redbull-red"
+              >
+                <option value="all">Semua Bulan</option>
+                {getAvailableMonths().map(month => {
+                  const [year, monthNum] = month.split('-');
+                  const monthName = new Date(Number(year), Number(monthNum) - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+                  return (
+                    <option key={month} value={month}>
+                      {monthName}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
 
-          {isFetching && orders.length === 0 ? (
+            {/* Period Filter Buttons */}
+            <div className="w-full max-w-xs">
+              <label className="block text-xs text-redbull-light mb-1">Periode</label>
+              <div className="flex space-x-1 bg-redbull-darker/50 rounded-lg p-1">
+                <button
+                  onClick={() => setPeriodFilter('all')}
+                  className={`flex-1 py-1 rounded-md text-sm font-medium transition-colors ${
+                    periodFilter === 'all'
+                      ? 'bg-redbull-red text-white'
+                      : 'text-redbull-light hover:bg-redbull-darker'
+                  }`}
+                >
+                  Semua
+                </button>
+                <button
+                  onClick={() => setPeriodFilter('1-15')}
+                  className={`flex-1 py-1 rounded-md text-sm font-medium transition-colors ${
+                    periodFilter === '1-15'
+                      ? 'bg-redbull-red text-white'
+                      : 'text-redbull-light hover:bg-redbull-darker'
+                  }`}
+                >
+                  1-15
+                </button>
+                <button
+                  onClick={() => setPeriodFilter('16-31')}
+                  className={`flex-1 py-1 rounded-md text-sm font-medium transition-colors ${
+                    periodFilter === '16-31'
+                      ? 'bg-redbull-red text-white'
+                      : 'text-redbull-light hover:bg-redbull-darker'
+                  }`}
+                >
+                  16-31
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-full mx-auto py-4 sm:py-8 px-2 sm:px-0 text-center flex-grow pb-20">
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 sm:p-6 border border-redbull-red/30">
+          <h2 className="text-2xl sm:text-3xl font-bold text-white mb-4 sm:mb-6 px-2 sm:px-6">Daftar Orderan per Hari</h2>
+
+          {isFetching && filteredOrders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-redbull-red mx-auto"></div>
               <p className="text-redbull-light mt-4">Memuat data orderan...</p>
             </div>
-          ) : orders.length === 0 ? (
-            <div className="text-center py-6">
-              <p className="text-redbull-light">Belum ada orderan</p>
-              <p className="text-redbull-light/70 text-sm mt-2">Tambah orderan pertama Anda dengan klik tombol di atas</p>
-            </div>
-          ) : (
-            (() => {
-              // Group orders by date
-              const groupedOrders = orders.reduce((acc, order) => {
-                if (!acc[order.tanggal]) {
-                  acc[order.tanggal] = [];
-                }
-                acc[order.tanggal].push(order);
-                return acc;
-              }, {} as Record<string, typeof orders>);
+          ) : (() => {
+            // Apply month and period filters to filteredOrders
+            let displayedOrders = filteredOrders;
 
-              // Sort dates in descending order (most recent first)
-              const sortedDates = Object.keys(groupedOrders).sort((a, b) =>
-                new Date(b).getTime() - new Date(a).getTime()
+            // Apply month filter
+            if (monthFilter !== 'all') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                const orderMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                return orderMonth === monthFilter;
+              });
+            }
+
+            // Apply period filter
+            if (periodFilter === '1-15') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                return date.getDate() >= 1 && date.getDate() <= 15;
+              });
+            } else if (periodFilter === '16-31') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                return date.getDate() >= 16 && date.getDate() <= 31;
+              });
+            }
+
+            if (displayedOrders.length === 0) {
+              return (
+                <div className="text-center py-6">
+                  <p className="text-redbull-light">Belum ada orderan</p>
+                  <p className="text-redbull-light/70 text-sm mt-2">Tambah orderan pertama Anda dengan klik tombol di atas</p>
+                </div>
               );
+            }
 
-              // Fungsi untuk mengecualikan orderan yang sudah ditutup buku
-              const filterOutClosedOrders = (allOrders: any[]) => {
-                if (!bookHistory || bookHistory.length === 0) return allOrders;
+            // Group orders by date
+            const allGroupedOrders = displayedOrders.reduce((acc, order) => {
+              if (!acc[order.tanggal]) {
+                acc[order.tanggal] = [];
+              }
+              acc[order.tanggal].push(order);
+              return acc;
+            }, {} as Record<string, typeof displayedOrders>);
 
-                return allOrders.filter(order => {
-                  const orderDate = new Date(order.tanggal);
+            // Sort dates in descending order (most recent first)
+            const allSortedDates = Object.keys(allGroupedOrders).sort((a, b) =>
+              new Date(b).getTime() - new Date(a).getTime()
+            );
 
-                  // Periksa apakah order ini termasuk dalam periode yang sudah ditutup buku
-                  for (const history of bookHistory) {
-                    const [year, month] = history.period.split('-').map(Number);
+            return (
+              <div className="space-y-2 -mx-6">
+                <div>
+                  {allSortedDates.map((date) => {
+                    const dateOrders = allGroupedOrders[date];
+                    const dailyTotal = dateOrders.reduce((sum, order) => sum + order.total, 0);
 
-                    const startDate = history.subPeriod === '1-15'
-                      ? new Date(year, month - 1, 1)
-                      : new Date(year, month - 1, 16);
+                    return (
+                      <div key={date} className="space-y-2">
+                        <div className="pt-6 pb-2 border-t border-redbull-red/30 px-6">
+                          <h3 className="font-bold text-white text-base sm:text-lg">
+                            {new Date(date).toLocaleDateString('id-ID', {
+                              weekday: 'long',
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric'
+                            })}
+                          </h3>
+                          <p className="text-sm text-green-400">Total Harian: Rp {dailyTotal.toLocaleString()}</p>
+                        </div>
+                        {dateOrders.map((order) => (
+                          <div key={order.id} className="overflow-hidden">
+                            <div className="grid grid-cols-12 items-center px-4 py-2 hover:bg-white/5 transition-colors duration-200 text-xs sm:text-sm">
+                              <div className="col-span-1">
+                                <div className={`w-2 h-8 rounded ${order.labelType === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
+                              </div>
+                              <div className="col-span-2 text-sm">
+                                <div className="text-redbull-light/80 text-xs sm:text-xs">Qty</div>
+                                <div className="font-medium">{order.qty}</div>
+                              </div>
+                              <div className="col-span-3 text-sm">
+                                <div className="text-redbull-light/80 text-xs">Tarif</div>
+                                <div className="font-medium text-xs sm:text-xs">Rp {order.tarif.toLocaleString()}</div>
+                              </div>
+                              <div className="col-span-3 text-sm">
+                                <div className="text-redbull-light/80 text-xs font-bold">Total</div>
+                                <div className="font-bold text-green-400 text-xs sm:text-xs">Rp {order.total.toLocaleString()}</div>
+                              </div>
+                              <div className="col-span-3 flex flex-col sm:flex-row sm:space-x-1 space-y-1 sm:space-y-0 justify-end">
+                                <button
+                                  onClick={() => openEditForm(order)}
+                                  className="text-xs bg-blue-600 hover:bg-blue-700 text-white py-1 px-2 rounded transition duration-200 whitespace-nowrap"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    if (confirm('Apakah Anda yakin ingin menghapus orderan ini?')) {
+                                      await deleteOrderFromFirebase(order.id);
+                                    }
+                                  }}
+                                  className="text-xs bg-red-600 hover:bg-red-700 text-white py-1 px-2 rounded transition duration-200 whitespace-nowrap"
+                                >
+                                  Hapus
+                                </button>
+                              </div>
+                            </div>
+                            {order.note && (
+                              <div className="px-4 py-1 bg-white/3 hover:bg-white/5 transition-colors duration-200 text-sm">
+                                <div className="text-redbull-light/80 text-xs">Catatan</div>
+                                <div className="text-white text-sm">{order.note}</div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
-                    const endDate = history.subPeriod === '1-15'
-                      ? new Date(year, month - 1, 16)  // 16 - 1 hari = 15
-                      : new Date(year, month, 0);      // akhir bulan
+          {/* Data status indicator */}
+          {(() => {
+            // Apply month and period filters to get displayed count
+            let displayedOrders = filteredOrders;
 
-                    if (orderDate >= startDate && orderDate < endDate) {
-                      // Jika order ini termasuk dalam periode yang sudah ditutup buku
-                      return false;
-                    }
-                  }
+            // Apply month filter
+            if (monthFilter !== 'all') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                const orderMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                return orderMonth === monthFilter;
+              });
+            }
 
-                  // Jika tidak termasuk dalam periode yang sudah ditutup buku
-                  return true;
+            // Apply period filter
+            if (periodFilter === '1-15') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                return date.getDate() >= 1 && date.getDate() <= 15;
+              });
+            } else if (periodFilter === '16-31') {
+              displayedOrders = displayedOrders.filter(order => {
+                const date = new Date(order.tanggal);
+                return date.getDate() >= 16 && date.getDate() <= 31;
+              });
+            }
+
+            if (displayedOrders.length > 0 && !isFetching) {
+              return (
+                <div className="mt-6 text-sm text-redbull-light/80 flex justify-between items-center px-6">
+                  <span className="text-sm">Menampilkan {displayedOrders.length} orderan dari {new Set(displayedOrders.map(o => o.tanggal)).size} hari berbeda</span>
+                  <button
+                    onClick={fetchOrders}
+                    disabled={isFetching}
+                    className="text-xs bg-gray-600 hover:bg-gray-700 disabled:opacity-50 text-white py-1 px-2 rounded transition duration-200 flex items-center"
+                  >
+                    {isFetching ? (
+                      <>
+                        <span className="animate-spin mr-1">🔄</span> Muat Ulang
+                      </>
+                    ) : 'Muat Ulang'}
+                  </button>
+                </div>
+              );
+            }
+            return null;
+          })()}
+
+          {/* Detailed Summary Section */}
+          <div className="mt-8">
+            <h3 className="text-xl font-bold text-white mb-4 px-2 sm:px-6">Rekap Data Berdasarkan Filter</h3>
+            {(() => {
+              // Apply month and period filters to get displayed orders for summary
+              let displayedOrders = filteredOrders;
+
+              // Apply month filter
+              if (monthFilter !== 'all') {
+                displayedOrders = displayedOrders.filter(order => {
+                  const date = new Date(order.tanggal);
+                  const orderMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                  return orderMonth === monthFilter;
                 });
-              };
+              }
 
-              // Filter orders untuk mengecualikan yang sudah ditutup buku
-              const filteredOrders = filterOutClosedOrders(orders);
+              // Apply period filter
+              if (periodFilter === '1-15') {
+                displayedOrders = displayedOrders.filter(order => {
+                  const date = new Date(order.tanggal);
+                  return date.getDate() >= 1 && date.getDate() <= 15;
+                });
+              } else if (periodFilter === '16-31') {
+                displayedOrders = displayedOrders.filter(order => {
+                  const date = new Date(order.tanggal);
+                  return date.getDate() >= 16 && date.getDate() <= 31;
+                });
+              }
 
-              // Group orders by date for display
-              const groupedOrders = filteredOrders.reduce((acc, order) => {
-                if (!acc[order.tanggal]) {
-                  acc[order.tanggal] = [];
+              if (displayedOrders.length === 0) {
+                return (
+                  <div className="text-center py-6">
+                    <p className="text-redbull-light">Tidak ada data untuk filter yang dipilih</p>
+                  </div>
+                );
+              }
+
+              // Calculate summary data
+              const totalOrders = displayedOrders.length;
+              const totalQty = displayedOrders.reduce((sum, order) => sum + order.qty, 0);
+              const totalNominal = displayedOrders.reduce((sum, order) => sum + order.total, 0);
+
+              // Calculate total working days (unique dates with orders)
+              const uniqueDates = new Set(displayedOrders.map(order => order.tanggal));
+              const totalWorkingDays = uniqueDates.size;
+
+              // Group by label type
+              const labelSummary: Record<string, { qty: number, nominal: number, count: number }> = {};
+              displayedOrders.forEach(order => {
+                const label = order.labelType || 'klik';
+                if (!labelSummary[label]) {
+                  labelSummary[label] = { qty: 0, nominal: 0, count: 0 };
                 }
-                acc[order.tanggal].push(order);
-                return acc;
-              }, {} as Record<string, typeof orders>);
+                labelSummary[label].qty += order.qty;
+                labelSummary[label].nominal += order.total;
+                labelSummary[label].count += 1;
+              });
 
-              // Sort dates in descending order (most recent first)
-              const sortedDates = Object.keys(groupedOrders).sort((a, b) =>
+              // Group by date for daily breakdown
+              const dailySummary: Record<string, { qty: number, nominal: number, count: number }> = {};
+              displayedOrders.forEach(order => {
+                if (!dailySummary[order.tanggal]) {
+                  dailySummary[order.tanggal] = { qty: 0, nominal: 0, count: 0 };
+                }
+                dailySummary[order.tanggal].qty += order.qty;
+                dailySummary[order.tanggal].nominal += order.total;
+                dailySummary[order.tanggal].count += 1;
+              });
+
+              // Sort dates in descending order
+              const sortedDates = Object.keys(dailySummary).sort((a, b) =>
                 new Date(b).getTime() - new Date(a).getTime()
               );
 
               return (
-                <div className="space-y-2 -mx-6">
-                  {/* Tampilkan tombol untuk melihat orderan yang ditutup buku jika sedang tidak menampilkan detailnya */}
-                  {!showClosedOrders && bookHistory.length > 0 && orders.length > 0 && (
-                    <div className="mx-6 bg-redbull-darker/50 p-3 rounded-lg border border-redbull-red/30">
-                      <p className="text-redbull-light mb-2">Terdapat orderan yang sudah ditutup buku</p>
-                      <div className="flex flex-wrap gap-2">
-                        {bookHistory.map(history => (
-                          <button
-                            key={history.id}
-                            onClick={async () => {
-                              setShowClosedOrders({period: history.period, subPeriod: history.subPeriod});
-                              const periodOrders = await fetchOrdersForPeriod(history.period, history.subPeriod as '1-15' | '16-31');
-                              setClosedOrders(periodOrders);
-                            }}
-                            className="text-xs bg-redbull-red hover:bg-redbull-lighter text-white py-1 px-2 rounded transition duration-200"
-                          >
-                            Lihat {history.period} ({history.subPeriod})
-                          </button>
-                        ))}
-                      </div>
+                <div className="space-y-6">
+                  {/* Overall Summary */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 px-2 sm:px-6">
+                    <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
+                      <h4 className="text-redbull-light text-sm mb-1">Total Hari Kerja</h4>
+                      <p className="text-2xl font-bold text-white">{totalWorkingDays}</p>
                     </div>
-                  )}
+                    <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
+                      <h4 className="text-redbull-light text-sm mb-1">Total Order</h4>
+                      <p className="text-2xl font-bold text-white">{totalOrders}</p>
+                    </div>
+                    <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
+                      <h4 className="text-redbull-light text-sm mb-1">Total Qty</h4>
+                      <p className="text-2xl font-bold text-white">{totalQty}</p>
+                    </div>
+                    <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
+                      <h4 className="text-redbull-light text-sm mb-1">Total Nominal</h4>
+                      <p className="text-2xl font-bold text-green-400">Rp {totalNominal.toLocaleString()}</p>
+                    </div>
+                  </div>
 
-                  {/* Tampilkan orderan untuk periode yang dipilih dari history jika sedang ditampilkan */}
-                  {showClosedOrders && (
-                    <div className="mx-6 bg-redbull-darker/50 p-3 rounded-lg border border-redbull-red/30 mb-4">
-                      <div className="flex justify-between items-center">
-                        <h4 className="font-bold text-white">Orderan {showClosedOrders.period} ({showClosedOrders.subPeriod})</h4>
-                        <button
-                          onClick={() => setShowClosedOrders(null)}
-                          className="text-xs bg-gray-600 hover:bg-gray-700 text-white py-1 px-2 rounded transition duration-200"
-                        >
-                          Tutup
-                        </button>
-                      </div>
-                      {(() => {
-                        // Group the orders by date
-                        const groupedOrders = closedOrders.reduce((acc, order) => {
-                          if (!acc[order.tanggal]) {
-                            acc[order.tanggal] = [];
-                          }
-                          acc[order.tanggal].push(order);
-                          return acc;
-                        }, {} as Record<string, any[]>);
-
-                        // Sort dates in descending order (most recent first)
-                        const sortedDates = Object.keys(groupedOrders).sort((a, b) =>
-                          new Date(b).getTime() - new Date(a).getTime()
-                        );
-
-                        return (
-                          <div className="mt-4 space-y-4">
-                            {sortedDates.map((date) => {
-                              const dateOrders = groupedOrders[date];
-                              const dailyTotal = dateOrders.reduce((sum, order) => sum + order.total, 0);
-
-                              return (
-                                <div key={date} className="border border-redbull-red/30 rounded-xl overflow-hidden">
-                                  <div className="bg-redbull-darker p-4 border-b border-redbull-red/30">
-                                    <h3 className="font-bold text-white">
-                                      {new Date(date).toLocaleDateString('id-ID', {
-                                        weekday: 'long',
-                                        year: 'numeric',
-                                        month: 'long',
-                                        day: 'numeric'
-                                      })}
-                                    </h3>
-                                    <p className="text-sm text-green-400">Total Harian: Rp {dailyTotal.toLocaleString()}</p>
-                                  </div>
-
-                                  <div className="space-y-2 p-4">
-                                    {dateOrders.map((order) => (
-                                      <div key={order.id} className="overflow-hidden">
-                                        <div className="grid grid-cols-12 items-center px-6 py-2 hover:bg-white/5 transition-colors duration-200">
-                                          <div className="col-span-1">
-                                            <div className={`w-2 h-8 rounded ${order.labelType === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
-                                          </div>
-                                          <div className="col-span-2 text-sm">
-                                            <div className="text-redbull-light/80 text-xs">Qty</div>
-                                            <div className="font-medium">{order.qty}</div>
-                                          </div>
-                                          <div className="col-span-3 text-sm">
-                                            <div className="text-redbull-light/80 text-xs">Tarif</div>
-                                            <div className="font-medium text-xs">Rp {order.tarif.toLocaleString()}</div>
-                                          </div>
-                                          <div className="col-span-3 text-sm">
-                                            <div className="text-redbull-light/80 text-xs font-bold">Total</div>
-                                            <div className="font-bold text-green-400 text-xs">Rp {order.total.toLocaleString()}</div>
-                                          </div>
-                                          <div className="col-span-3 flex flex-col space-y-1 justify-end">
-                                            <button
-                                              onClick={() => openEditForm(order)}
-                                              className="text-xs bg-blue-600 hover:bg-blue-700 text-white py-1 px-2 rounded transition duration-200"
-                                            >
-                                              Edit
-                                            </button>
-                                            <button
-                                              onClick={async () => {
-                                                if (confirm('Apakah Anda yakin ingin menghapus orderan ini?')) {
-                                                  await deleteOrderFromFirebase(order.id);
-                                                }
-                                              }}
-                                              className="text-xs bg-red-600 hover:bg-red-700 text-white py-1 px-2 rounded transition duration-200"
-                                            >
-                                              Hapus
-                                            </button>
-                                          </div>
-                                        </div>
-                                        {order.note && (
-                                          <div className="px-6 py-1 bg-white/3 hover:bg-white/5 transition-colors duration-200">
-                                            <div className="text-redbull-light/80 text-xs">Catatan</div>
-                                            <div className="text-white text-sm">{order.note}</div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                  {/* Label Breakdown */}
+                  <div className="px-2 sm:px-6">
+                    <h4 className="text-lg font-semibold text-white mb-3">Rekap Berdasarkan Jenis Label</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {Object.entries(labelSummary).map(([label, data]) => (
+                        <div key={label} className="bg-redbull-darker/30 p-3 rounded-lg border border-redbull-red/20">
+                          <div className="flex items-center mb-2">
+                            <div className={`w-3 h-3 rounded mr-2 ${label === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
+                            <span className="font-medium text-white">{label}</span>
                           </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Tampilkan orderan saat ini jika tidak sedang menampilkan detail dari history */}
-                  {!showClosedOrders && (
-                    <div>
-                      {sortedDates.map((date) => {
-                        const dateOrders = groupedOrders[date];
-                        const dailyTotal = dateOrders.reduce((sum, order) => sum + order.total, 0);
-
-                        return (
-                          <div key={date} className="space-y-2">
-                            <div className="pt-6 pb-2 border-t border-redbull-red/30 px-6">
-                              <h3 className="font-bold text-white text-lg">
-                                {new Date(date).toLocaleDateString('id-ID', {
-                                  weekday: 'long',
-                                  year: 'numeric',
-                                  month: 'long',
-                                  day: 'numeric'
-                                })}
-                              </h3>
-                              <p className="text-sm text-green-400">Total Harian: Rp {dailyTotal.toLocaleString()}</p>
+                          <div className="grid grid-cols-3 gap-2 text-sm">
+                            <div>
+                              <p className="text-redbull-light">Order</p>
+                              <p className="text-white font-medium">{data.count}</p>
                             </div>
-                            {dateOrders.map((order, index) => (
-                              <div key={order.id} className="overflow-hidden">
-                                <div className="grid grid-cols-12 items-center px-6 py-2 hover:bg-white/5 transition-colors duration-200">
-                                  <div className="col-span-1">
-                                    <div className={`w-2 h-8 rounded ${order.labelType === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
-                                  </div>
-                                  <div className="col-span-2 text-sm">
-                                    <div className="text-redbull-light/80 text-xs">Qty</div>
-                                    <div className="font-medium">{order.qty}</div>
-                                  </div>
-                                  <div className="col-span-3 text-sm">
-                                    <div className="text-redbull-light/80 text-xs">Tarif</div>
-                                    <div className="font-medium text-xs">Rp {order.tarif.toLocaleString()}</div>
-                                  </div>
-                                  <div className="col-span-3 text-sm">
-                                    <div className="text-redbull-light/80 text-xs font-bold">Total</div>
-                                    <div className="font-bold text-green-400 text-xs">Rp {order.total.toLocaleString()}</div>
-                                  </div>
-                                  <div className="col-span-3 flex flex-col space-y-1 justify-end">
-                                    <button
-                                      onClick={() => openEditForm(order)}
-                                      className="text-xs bg-blue-600 hover:bg-blue-700 text-white py-1 px-2 rounded transition duration-200"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      onClick={async () => {
-                                        if (confirm('Apakah Anda yakin ingin menghapus orderan ini?')) {
-                                          await deleteOrderFromFirebase(order.id);
-                                        }
-                                      }}
-                                      className="text-xs bg-red-600 hover:bg-red-700 text-white py-1 px-2 rounded transition duration-200"
-                                    >
-                                      Hapus
-                                    </button>
-                                  </div>
-                                </div>
-                                {order.note && (
-                                  <div className="px-6 py-1 bg-white/3 hover:bg-white/5 transition-colors duration-200">
-                                    <div className="text-redbull-light/80 text-xs">Catatan</div>
-                                    <div className="text-white text-sm">{order.note}</div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                            <div>
+                              <p className="text-redbull-light">Qty</p>
+                              <p className="text-white font-medium">{data.qty}</p>
+                            </div>
+                            <div>
+                              <p className="text-redbull-light">Nominal</p>
+                              <p className="text-green-400 font-medium">Rp {data.nominal.toLocaleString()}</p>
+                            </div>
                           </div>
-                        );
-                      })}
+                        </div>
+                      ))}
                     </div>
-                  )}
+                  </div>
+
+                  {/* Daily Breakdown */}
+                  <div className="px-2 sm:px-6">
+                    <h4 className="text-lg font-semibold text-white mb-3">Rekap Harian</h4>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-redbull-red/30">
+                        <thead>
+                          <tr>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Tanggal</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Order</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Qty</th>
+                            <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Nominal</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-redbull-red/20">
+                          {sortedDates.map(date => (
+                            <tr key={date} className="hover:bg-white/5">
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-white">
+                                {new Date(date).toLocaleDateString('id-ID', {
+                                  weekday: 'short',
+                                  day: 'numeric',
+                                  month: 'short'
+                                })}
+                              </td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-white">{dailySummary[date].count}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-white">{dailySummary[date].qty}</td>
+                              <td className="px-4 py-2 whitespace-nowrap text-sm text-green-400">Rp {dailySummary[date].nominal.toLocaleString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               );
-            })()
-          )}
+            })()}
+          </div>
+        </div>
 
-          {/* Data status indicator */}
-          {orders.length > 0 && !isFetching && (
-            <div className="mt-6 text-sm text-redbull-light/80 flex justify-between items-center px-6">
-              <span>Menampilkan {orders.length} orderan dari {new Set(orders.map(o => o.tanggal)).size} hari berbeda</span>
-              <button
-                onClick={fetchOrders}
-                disabled={isFetching}
-                className="text-xs bg-gray-600 hover:bg-gray-700 disabled:opacity-50 text-white py-1 px-2 rounded transition duration-200 flex items-center"
+        {/* Export Controls */}
+        <div className="px-6 mt-6 space-y-3">
+          <div className="flex flex-wrap gap-3">
+            <div className="flex-1 min-w-[150px]">
+              <label className="block text-redbull-light mb-1">Format Ekspor</label>
+              <select
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value as 'basic' | 'withRupiah')}
+                className="w-full bg-redbull-darker/50 border border-redbull-light/20 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-1 focus:ring-redbull-red"
               >
-                {isFetching ? (
-                  <>
-                    <span className="animate-spin mr-1">🔄</span> Muat Ulang
-                  </>
-                ) : 'Muat Ulang'}
-              </button>
-            </div>
-          )}
-
-          {/* Tutup Buku Section */}
-          <div className="mt-8 px-6">
-            <h3 className="text-xl font-bold text-white mb-4">Tutup Buku</h3>
-            <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
-              <p className="text-redbull-light mb-4">Tutup buku untuk periode 1-15 dan 16-akhir bulan</p>
-              <div className="flex flex-wrap gap-4">
-                {(() => {
-                  const now = new Date();
-                  const currentDay = now.getDate();
-
-                  // Cek apakah ada orderan untuk periode tertentu
-                  const hasOrdersForPeriod = (startDate: Date, endDate: Date) => {
-                    return orders.some(order => {
-                      const orderDate = new Date(order.tanggal);
-                      return orderDate >= startDate && orderDate < endDate;
-                    });
-                  };
-
-                  // Periode 1-15 bulan ini
-                  const currentFirstPeriodStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                  const currentFirstPeriodEnd = new Date(now.getFullYear(), now.getMonth(), 16);
-
-                  // Periode 16-akhir bulan ini
-                  const currentSecondPeriodStart = new Date(now.getFullYear(), now.getMonth(), 16);
-                  const currentSecondPeriodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-
-                  // Periode 1-15 bulan lalu
-                  const lastMonthFirstStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                  const lastMonthFirstEnd = new Date(now.getFullYear(), now.getMonth() - 1, 16);
-
-                  // Periode 16-akhir bulan lalu
-                  const lastMonthSecondStart = new Date(now.getFullYear(), now.getMonth() - 1, 16);
-                  const lastMonthSecondEnd = new Date(now.getFullYear(), now.getMonth(), 1);
-
-                  return (
-                    <>
-                      {/* Tombol 1-15 bulan ini (tampil hanya jika masih tanggal 1-15 dan ada orderan) */}
-                      {currentDay <= 15 && hasOrdersForPeriod(currentFirstPeriodStart, currentFirstPeriodEnd) && (
-                        <button
-                          key="current-1-15"
-                          onClick={async () => {
-                            const result = await closeBook(now.getMonth() + 1, now.getFullYear(), 'first');
-                            if (result.success) {
-                              alert(result.message);
-                              fetchBookHistory(); // Refresh history setelah tutup buku
-                              fetchOrders(); // Refresh orders
-                            } else {
-                              alert(`Error: ${result.message}`);
-                            }
-                          }}
-                          className="bg-redbull-red hover:bg-redbull-lighter text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-                        >
-                          Tutup Buku 1-15 Bulan Ini
-                        </button>
-                      )}
-
-                      {/* Tombol 16-akhir bulan ini (tampil hanya jika sudah lewat tanggal 15 dan ada orderan) */}
-                      {currentDay > 15 && hasOrdersForPeriod(currentSecondPeriodStart, currentSecondPeriodEnd) && (
-                        <button
-                          key="current-16-end"
-                          onClick={async () => {
-                            const result = await closeBook(now.getMonth() + 1, now.getFullYear(), 'second');
-                            if (result.success) {
-                              alert(result.message);
-                              fetchBookHistory(); // Refresh history setelah tutup buku
-                              fetchOrders(); // Refresh orders
-                            } else {
-                              alert(`Error: ${result.message}`);
-                            }
-                          }}
-                          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-                        >
-                          Tutup Buku 16-{new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()} Bulan Ini
-                        </button>
-                      )}
-
-                      {/* Tombol bulan lalu - 1-15 (tampil hanya jika ada orderan) */}
-                      {hasOrdersForPeriod(lastMonthFirstStart, lastMonthFirstEnd) && (
-                        <button
-                          onClick={async () => {
-                            const result = await closeBook(lastMonthFirstStart.getMonth() + 1, lastMonthFirstStart.getFullYear(), 'first');
-                            if (result.success) {
-                              alert(result.message);
-                              fetchBookHistory(); // Refresh history setelah tutup buku
-                              fetchOrders(); // Refresh orders
-                            } else {
-                              alert(`Error: ${result.message}`);
-                            }
-                          }}
-                          className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-                        >
-                          Tutup Buku 1-15 Bulan Lalu
-                        </button>
-                      )}
-
-                      {/* Tombol bulan lalu - 16-akhir (tampil hanya jika ada orderan) */}
-                      {hasOrdersForPeriod(lastMonthSecondStart, lastMonthSecondEnd) && (
-                        <button
-                          onClick={async () => {
-                            const result = await closeBook(lastMonthSecondStart.getMonth() + 1, lastMonthSecondStart.getFullYear(), 'second');
-                            if (result.success) {
-                              alert(result.message);
-                              fetchBookHistory(); // Refresh history setelah tutup buku
-                              fetchOrders(); // Refresh orders
-                            } else {
-                              alert(`Error: ${result.message}`);
-                            }
-                          }}
-                          className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
-                        >
-                          Tutup Buku 16-{(() => {
-                            const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                            return new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0).getDate();
-                          })()} Bulan Lalu
-                        </button>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
+                <option value="basic">Basic (Qty Saja)</option>
+                <option value="withRupiah">Dengan Rupiah Lengkap</option>
+              </select>
             </div>
           </div>
 
-          {/* History Tutup Buku Section */}
-          <div className="mt-8 px-6">
-            <h3 className="text-xl font-bold text-white mb-4">History Tutup Buku</h3>
-            <div className="bg-redbull-darker/50 p-4 rounded-lg border border-redbull-red/30">
-              {isHistoryLoading ? (
-                <div className="flex items-center justify-center py-6">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-redbull-red mx-auto"></div>
-                  <span className="ml-2 text-redbull-light">Memuat history...</span>
-                </div>
-              ) : bookHistory.length === 0 ? (
-                <p className="text-center text-redbull-light py-6">Belum ada history tutup buku</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-redbull-red/30">
-                    <thead>
-                      <tr>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Periode</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Tanggal</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Total Order</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Rekap Qty</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Rekap Nominal</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-redbull-light uppercase tracking-wider">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-redbull-red/20">
-                      {bookHistory.map((history) => (
-                        <tr key={history.id}>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-white">{history.period} ({history.subPeriod})</td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-white">
-                            {new Date(history.startDate).toLocaleDateString('id-ID')} - {new Date(new Date(history.endDate).getTime() - 86400000).toLocaleDateString('id-ID')}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-white">{history.totalOrders}</td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm">
-                            {history.qtyByLabel ? Object.entries(history.qtyByLabel).map(([label, qty]) => (
-                              <div key={label} className="flex items-center">
-                                <span className={`w-2 h-4 mr-2 rounded ${label === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></span>
-                                <span className="text-white">{label}: {qty}</span>
-                              </div>
-                            )) : <span className="text-redbull-light">-</span>}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm">
-                            {history.nominalByLabel ? Object.entries(history.nominalByLabel).map(([label, nominal]) => (
-                              <div key={label} className="flex items-center">
-                                <span className={`w-2 h-4 mr-2 rounded ${label === 'klik' ? 'bg-blue-500' : 'bg-green-500'}`}></span>
-                                <span className="text-white">{label}: Rp {nominal.toLocaleString()}</span>
-                              </div>
-                            )) : <span className="text-redbull-light">-</span>}
-                          </td>
-                          <td className="px-4 py-2 whitespace-nowrap text-sm text-white">
-                            <div className="flex flex-col">
-                              <span>Qty: {history.totalQty || 0}</span>
-                              <span className="text-green-400">Rp: {(history.totalNominal || 0).toLocaleString()}</span>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
+          <button
+            onClick={showExportPreviewHandler}
+            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center"
+          >
+            <span>Pratinjau Ekspor Data</span>
+          </button>
         </div>
       </main>
 
@@ -1286,16 +1265,49 @@ export default function OrdersPage() {
         </div>
       )}
 
-      <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0">
+      {/* Export Preview Modal */}
+      {showExportPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-redbull-darker rounded-xl p-6 w-full max-w-2xl border border-redbull-red/30 max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-redbull-red">Pratinjau Ekspor Data</h3>
+              <button
+                onClick={() => setShowExportPreview(false)}
+                className="text-white hover:text-redbull-red"
+              >
+                &times;
+              </button>
+            </div>
+
+            <div className="bg-gray-900 p-4 rounded-lg mb-4 overflow-y-auto flex-grow">
+              <pre className="whitespace-pre-wrap text-sm text-white font-mono">
+                {exportText}
+              </pre>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowExportPreview(false)}
+                className="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
+              >
+                Batal
+              </button>
+              <button
+                onClick={copyExportText}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300"
+              >
+                Salin ke Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0 z-40">
         <ul className="flex justify-around">
           <li>
             <a href="/dashboard" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
               <span>Dasbor</span>
-            </a>
-          </li>
-          <li>
-            <a href="/oil-change" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Sparepart</span>
             </a>
           </li>
           <li>

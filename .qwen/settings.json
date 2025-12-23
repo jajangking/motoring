@@ -1,0 +1,8 @@
+{
+  "ui": {
+    "accessibility": {
+      "disableLoadingPhrases": true
+    }
+  },
+  "$version": 2
+}

@@ -11,7 +11,7 @@
   --redbull-darker: #000000;
 }
 
-@theme inline {
+@theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-redbull-red: var(--redbull-red);
@@ -19,8 +19,8 @@
   --color-redbull-light: var(--redbull-light);
   --color-redbull-dark: var(--redbull-dark);
   --color-redbull-darker: var(--redbull-darker);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-geist-sans: var(--font-geist-sans);
+  --font-geist-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {

@@ -72,11 +72,6 @@ export default function ProfilePage() {
             </a>
           </li>
           <li>
-            <a href="/oil-change" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Sparepart</span>
-            </a>
-          </li>
-          <li>
             <a href="/orders" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
               <span>Orderan</span>
             </a>
