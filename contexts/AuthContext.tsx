@@ -68,7 +68,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
 
       setUser(result.user);
-      return result;
     } catch (error: any) {
       throw error;
     }

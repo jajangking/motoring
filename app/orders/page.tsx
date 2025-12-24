@@ -64,7 +64,7 @@ export default function OrdersPage() {
   const getAvailableMonths = () => {
     if (!orders || orders.length === 0) return [];
 
-    const monthsSet = new Set();
+    const monthsSet = new Set<string>();
     orders.forEach(order => {
       const date = new Date(order.tanggal);
       const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -72,11 +72,11 @@ export default function OrdersPage() {
     });
 
     // Sort months in descending order (most recent first)
-    return Array.from(monthsSet).sort((a, b) => {
+    return Array.from(monthsSet).sort((a: string, b: string) => {
       const [yearA, monthA] = a.split('-').map(Number);
       const [yearB, monthB] = b.split('-').map(Number);
       if (yearA !== yearB) return yearB - yearA;
-      return monthB - monthA;
+      return monthB - yearA;
     });
   };
 
@@ -349,7 +349,8 @@ export default function OrdersPage() {
         qty: '',
         tarif: '',
         tanggal: '',
-        note: ''
+        note: '',
+        labelType: 'klik'
       });
 
       // Close popup and reset editing state
@@ -810,7 +811,7 @@ export default function OrdersPage() {
                 <div>
                   {allSortedDates.map((date) => {
                     const dateOrders = allGroupedOrders[date];
-                    const dailyTotal = dateOrders.reduce((sum, order) => sum + order.total, 0);
+                    const dailyTotal = dateOrders.reduce((sum: number, order: any) => sum + order.total, 0);
 
                     return (
                       <div key={date} className="space-y-2">
@@ -825,7 +826,7 @@ export default function OrdersPage() {
                           </h3>
                           <p className="text-sm text-green-400">Total Harian: Rp {dailyTotal.toLocaleString()}</p>
                         </div>
-                        {dateOrders.map((order) => (
+                        {dateOrders.map((order: any) => (
                           <div key={order.id} className="overflow-hidden">
                             <div className="grid grid-cols-12 items-center px-4 py-2 hover:bg-white/5 transition-colors duration-200 text-xs sm:text-sm">
                               <div className="col-span-1">
@@ -1316,24 +1317,19 @@ export default function OrdersPage() {
             </a>
           </li>
           <li>
-            <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Profil</span>
+            <a href="/spareparts" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+              <span>Spareparts</span>
             </a>
           </li>
           <li>
-            <button
-              onClick={async () => {
-                try {
-                  await logout();
-                  router.push('/login');
-                } catch (error) {
-                  console.error('Logout error:', error);
-                }
-              }}
-              className="flex flex-col items-center text-white bg-transparent border-none"
-            >
-              <span>Keluar</span>
-            </button>
+            <a href="/fueling" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+              <span>Isi Bensin</span>
+            </a>
+          </li>
+          <li>
+            <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+              <span>Profil</span>
+            </a>
           </li>
         </ul>
       </nav>
