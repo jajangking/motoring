@@ -496,8 +496,12 @@ const FloatingAIAssistant = () => {
       }
 
       // Check if API key is available
-      if (!process.env.GROQ_API_KEY) {
-        throw new Error('GROQ API key is not configured. Please set GROQ_API_KEY in your environment variables.');
+      if (!process.env.NEXT_PUBLIC_GROQ_API_KEY) {
+        throw new Error('GROQ API key is not configured. Please set NEXT_PUBLIC_GROQ_API_KEY in your environment variables.');
+      }
+
+      if (process.env.NEXT_PUBLIC_GROQ_API_KEY.length < 10) {
+        throw new Error('GROQ API key appears to be invalid (too short). Please verify your NEXT_PUBLIC_GROQ_API_KEY in your environment variables.');
       }
 
       // Call Groq API
@@ -505,7 +509,7 @@ const FloatingAIAssistant = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+          'Authorization': `Bearer ${process.env.NEXT_PUBLIC_GROQ_API_KEY}`
         },
         body: JSON.stringify({
           messages: [
@@ -515,7 +519,7 @@ const FloatingAIAssistant = () => {
             },
             ...conversationMessages
           ],
-          model: 'openai/gpt-oss-120b', // Using GPT-OSS model
+          model: 'llama-3.1-8b-instant', // Using a Groq OSS-based model (open source alternative to gpt-oss)
           temperature: 0.7,
           max_tokens: 1000, // Increased for reports/analysis
           top_p: 1,
@@ -524,7 +528,19 @@ const FloatingAIAssistant = () => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch (parseError) {
+          // If response is not JSON, get the text
+          try {
+            const errorText = await response.text();
+            errorData = { error: errorText || `HTTP Error ${response.status}` };
+          } catch (textError) {
+            // If we can't get the text, use the status code
+            errorData = { error: `HTTP Error ${response.status}` };
+          }
+        }
         console.error('API Error:', errorData);
         throw new Error(`API request failed with status ${response.status}: ${JSON.stringify(errorData)}`);
       }
