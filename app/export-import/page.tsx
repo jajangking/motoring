@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, query, where, orderBy, Timestamp, addDoc, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy, Timestamp, addDoc, writeBatch, doc } from 'firebase/firestore';
 
 // Interface untuk struktur data ekspor
 interface ExportData {
@@ -54,7 +54,7 @@ export default function ExportImportPage() {
     
     try {
       // Ambil data berdasarkan tipe ekspor
-      let orders = [], spareparts = [], fuelStops = [], motorcycles = [], dailyKmHistory = [];
+      let orders: any[] = [], spareparts: any[] = [], fuelStops: any[] = [], motorcycles: any[] = [], dailyKmHistory: any[] = [];
       
       if (exportType === 'full' || exportType === 'orders') {
         const ordersQuery = query(collection(db, "orders"), where("userId", "==", user.uid));
@@ -168,8 +168,8 @@ export default function ExportImportPage() {
         for (let i = 0; i < data.orders.length; i++) {
           const order = data.orders[i];
           const { id, ...orderData } = order;
-          const newOrderRef = collection(db, "orders").withConverter(Timestamp);
-          batch.set(newOrderRef, {
+          const newOrderRef = collection(db, "orders");
+          batch.set(doc(newOrderRef), {
             ...orderData,
             userId: user.uid
           });
@@ -188,7 +188,7 @@ export default function ExportImportPage() {
         for (let i = 0; i < data.spareparts.length; i++) {
           const sparepart = data.spareparts[i];
           const { id, ...sparepartData } = sparepart;
-          const newSparepartRef = collection(db, "spareparts");
+          const newSparepartRef = doc(collection(db, "spareparts"));
           batch.set(newSparepartRef, {
             ...sparepartData,
             userId: user.uid
@@ -208,7 +208,7 @@ export default function ExportImportPage() {
         for (let i = 0; i < data.fuelStops.length; i++) {
           const fuelStop = data.fuelStops[i];
           const { id, ...fuelStopData } = fuelStop;
-          const newFuelStopRef = collection(db, "fuelStops");
+          const newFuelStopRef = doc(collection(db, "fuelStops"));
           batch.set(newFuelStopRef, {
             ...fuelStopData,
             userId: user.uid
@@ -228,7 +228,7 @@ export default function ExportImportPage() {
         for (let i = 0; i < data.motorcycles.length; i++) {
           const motorcycle = data.motorcycles[i];
           const { id, ...motorcycleData } = motorcycle;
-          const newMotorcycleRef = collection(db, "motorcycles");
+          const newMotorcycleRef = doc(collection(db, "motorcycles"));
           batch.set(newMotorcycleRef, {
             ...motorcycleData,
             userId: user.uid
@@ -248,7 +248,7 @@ export default function ExportImportPage() {
         for (let i = 0; i < data.dailyKmHistory.length; i++) {
           const kmEntry = data.dailyKmHistory[i];
           const { id, ...kmData } = kmEntry;
-          const newKmRef = collection(db, "dailyKmHistory");
+          const newKmRef = doc(collection(db, "dailyKmHistory"));
           batch.set(newKmRef, {
             ...kmData,
             userId: user.uid
