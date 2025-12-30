@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, deleteDoc, writeBatch, limit, startAfter, QueryDocumentSnapshot } from 'firebase/firestore';
+import NotificationPanel from '@/components/NotificationPanel';
 
 export default function OrdersPage() {
   // Fungsi untuk mendapatkan bulan saat ini dalam format YYYY-MM
@@ -48,6 +49,12 @@ export default function OrdersPage() {
   const [showExportPreview, setShowExportPreview] = useState(false); // State for showing export preview
   const [exportText, setExportText] = useState(''); // State to store the export text
   const [exportFormat, setExportFormat] = useState<'basic' | 'withRupiah'>('basic'); // State for export format
+  
+  // Pagination states
+  const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [pageSize] = useState(20); // Number of items per page
 
   // Function to check if an order is in a closed book period
   const isOrderInClosedPeriod = (orderDate: string) => {
@@ -80,19 +87,34 @@ export default function OrdersPage() {
     });
   };
 
-
-
-  // Fetch orders and book history from Firebase
-  const fetchOrders = async () => {
+  // Fetch orders and book history from Firebase with pagination
+  const fetchOrders = async (reset: boolean = true) => {
     if (user) {
       setIsFetching(true); // Set fetching state
       try {
         console.log("Fetching orders for user:", user.uid);
-        const q = query(
-          collection(db, "orders"),
-          where("userId", "==", user.uid)
-          // Hapus orderBy untuk menghindari kebutuhan indeks
-        );
+        
+        let q;
+        if (reset) {
+          // Initial fetch - get first page
+          q = query(
+            collection(db, "orders"),
+            where("userId", "==", user.uid),
+            orderBy("tanggal", "desc"),
+            limit(pageSize)
+          );
+        } else {
+          // Fetch next page
+          if (!lastVisible) return; // If no last visible document, we've reached the end
+          q = query(
+            collection(db, "orders"),
+            where("userId", "==", user.uid),
+            orderBy("tanggal", "desc"),
+            startAfter(lastVisible),
+            limit(pageSize)
+          );
+        }
+        
         const querySnapshot = await getDocs(q);
         console.log("Query result:", querySnapshot.size, "documents");
 
@@ -120,7 +142,21 @@ export default function OrdersPage() {
           };
           console.log("Processed order:", order);
           return order;
-        }).sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime()); // Urutkan di sisi client dari terbaru
+        });
+
+        // Update last visible document for pagination
+        const lastDoc = querySnapshot.docs[querySnapshot.docs.length - 1];
+        if (reset) {
+          // Reset the list and set the first page
+          setOrders(fetchedOrders);
+          setLastVisible(lastDoc || null);
+          setHasMore(querySnapshot.size === pageSize); // If we got exactly pageSize docs, there might be more
+        } else {
+          // Append to existing list
+          setOrders(prev => [...prev, ...fetchedOrders]);
+          setLastVisible(lastDoc || null);
+          setHasMore(querySnapshot.size === pageSize); // If we got exactly pageSize docs, there might be more
+        }
 
         // Fetch book history
         const historyQuery = query(collection(db, "bookHistory"), orderBy("startDate", "desc"));
@@ -135,7 +171,6 @@ export default function OrdersPage() {
         const filteredOrders = fetchedOrders.filter(order => !isOrderInClosedPeriod(order.tanggal));
 
         console.log("Setting orders state to:", fetchedOrders);
-        setOrders(fetchedOrders);
         setFilteredOrders(filteredOrders); // Set filtered orders (orders not in closed periods)
         setError(''); // Clear any previous errors
       } catch (err) {
@@ -143,7 +178,16 @@ export default function OrdersPage() {
         setError("Gagal mengambil data orderan. Silakan coba lagi.");
       } finally {
         setIsFetching(false); // Always reset fetching state
+        setIsLoadingMore(false); // Reset loading more state
       }
+    }
+  };
+
+  // Function to load more orders
+  const loadMoreOrders = async () => {
+    if (hasMore && !isLoadingMore) {
+      setIsLoadingMore(true);
+      await fetchOrders(false); // Fetch next page
     }
   };
 
@@ -152,7 +196,7 @@ export default function OrdersPage() {
       if (!user) {
         router.push('/login');
       } else {
-        fetchOrders(); // Fetch orders from Firebase
+        fetchOrders(true); // Fetch orders from Firebase
         setIsLoading(false);
       }
     }
@@ -161,7 +205,7 @@ export default function OrdersPage() {
   // Fetch orders when user changes or component mounts
   useEffect(() => {
     if (user && !authIsLoading) {
-      fetchOrders();
+      fetchOrders(true);
     }
   }, [user, authIsLoading]);
 
@@ -260,7 +304,7 @@ export default function OrdersPage() {
       console.log("Order updated in state, new orders state:", setOrders);
 
       // Refresh orders to trigger filtering
-      await fetchOrders();
+      await fetchOrders(true);
     } catch (err) {
       console.error("Error updating order: ", err);
       throw err;
@@ -282,7 +326,7 @@ export default function OrdersPage() {
       console.log("Order deleted from state, new orders state:", setOrders);
 
       // Refresh orders to trigger filtering
-      await fetchOrders();
+      await fetchOrders(true);
     } catch (err) {
       console.error("Error deleting order: ", err);
       throw err;
@@ -358,7 +402,7 @@ export default function OrdersPage() {
       setEditingOrderId(null);
 
       // Refresh orders to trigger filtering
-      await fetchOrders();
+      await fetchOrders(true);
 
       // Clear success message after delay
       setTimeout(() => {
@@ -394,7 +438,7 @@ export default function OrdersPage() {
     await batch.commit();
 
     // Refresh orders to trigger filtering
-    await fetchOrders();
+    await fetchOrders(true);
   };
 
   const openEditForm = (order: any) => {
@@ -752,14 +796,14 @@ export default function OrdersPage() {
         <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 sm:p-6 border border-redbull-red/30">
           <h2 className="text-2xl sm:text-3xl font-bold text-white mb-4 sm:mb-6 px-2 sm:px-6">Daftar Orderan per Hari</h2>
 
-          {isFetching && filteredOrders.length === 0 ? (
+          {isFetching && orders.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-10">
               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-redbull-red mx-auto"></div>
               <p className="text-redbull-light mt-4">Memuat data orderan...</p>
             </div>
           ) : (() => {
-            // Apply month and period filters to filteredOrders
-            let displayedOrders = filteredOrders;
+            // Apply month and period filters to orders
+            let displayedOrders = orders;
 
             // Apply month filter
             if (monthFilter !== 'all') {
@@ -875,6 +919,19 @@ export default function OrdersPage() {
                     );
                   })}
                 </div>
+                
+                {/* Load More Button */}
+                {hasMore && (
+                  <div className="mt-6 flex justify-center">
+                    <button
+                      onClick={loadMoreOrders}
+                      disabled={isLoadingMore}
+                      className="bg-redbull-red hover:bg-redbull-lighter disabled:opacity-50 text-white font-bold py-2 px-6 rounded-lg transition duration-300"
+                    >
+                      {isLoadingMore ? 'Memuat...' : 'Muat Lebih Banyak'}
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -882,7 +939,7 @@ export default function OrdersPage() {
           {/* Data status indicator */}
           {(() => {
             // Apply month and period filters to get displayed count
-            let displayedOrders = filteredOrders;
+            let displayedOrders = orders;
 
             // Apply month filter
             if (monthFilter !== 'all') {
@@ -911,7 +968,7 @@ export default function OrdersPage() {
                 <div className="mt-6 text-sm text-redbull-light/80 flex justify-between items-center px-6">
                   <span className="text-sm">Menampilkan {displayedOrders.length} orderan dari {new Set(displayedOrders.map(o => o.tanggal)).size} hari berbeda</span>
                   <button
-                    onClick={fetchOrders}
+                    onClick={() => fetchOrders(true)}
                     disabled={isFetching}
                     className="text-xs bg-gray-600 hover:bg-gray-700 disabled:opacity-50 text-white py-1 px-2 rounded transition duration-200 flex items-center"
                   >
@@ -932,7 +989,7 @@ export default function OrdersPage() {
             <h3 className="text-xl font-bold text-white mb-4 px-2 sm:px-6">Rekap Data Berdasarkan Filter</h3>
             {(() => {
               // Apply month and period filters to get displayed orders for summary
-              let displayedOrders = filteredOrders;
+              let displayedOrders = orders;
 
               // Apply month filter
               if (monthFilter !== 'all') {

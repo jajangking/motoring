@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, limit } from 'firebase/firestore';
+import Skeleton from '@/components/Skeleton';
+import NotificationPanel from '@/components/NotificationPanel';
 
 export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
@@ -31,6 +33,8 @@ export default function DashboardPage() {
   const [motorcycles, setMotorcycles] = useState<any[]>([]);
   const [selectedMotorcycle, setSelectedMotorcycle] = useState<string>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Function to get current period based on current date
   const getCurrentPeriod = () => {
@@ -223,6 +227,9 @@ export default function DashboardPage() {
   const fetchAllData = async () => {
     if (user) {
       try {
+        setError(null); // Reset error state
+        setIsLoading(true); // Show loading state
+
         // Fetch all necessary data in parallel
         const [kmHistoryPromise, sparepartsPromise, fuelStopsPromise, ordersPromise, motorcyclesPromise] = [
           fetchDailyKmHistory(),
@@ -242,8 +249,19 @@ export default function DashboardPage() {
 
         // Calculate reports
         calculateReports(kmHistory, sparepartsData, fuelStopsData, ordersData, motorcyclesData);
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching data for reports:", err);
+        setError(err.message || 'Gagal mengambil data. Silakan coba lagi nanti.');
+        
+        // Implement retry logic
+        if (retryCount < 3) {
+          setTimeout(() => {
+            setRetryCount(prev => prev + 1);
+            fetchAllData();
+          }, 2000); // Retry after 2 seconds
+        }
+      } finally {
+        setIsLoading(false);
       }
     }
   };
@@ -273,9 +291,9 @@ export default function DashboardPage() {
 
         setDailyKmHistory(history);
         return history;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching daily KM history: ", err);
-        return [];
+        throw new Error(`Gagal mengambil riwayat KM: ${err.message || 'Kesalahan tidak diketahui'}`);
       }
     }
     return [];
@@ -308,9 +326,9 @@ export default function DashboardPage() {
 
         setSpareparts(spareparts);
         return spareparts;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching spareparts: ", err);
-        return [];
+        throw new Error(`Gagal mengambil data sparepart: ${err.message || 'Kesalahan tidak diketahui'}`);
       }
     }
     return [];
@@ -343,9 +361,9 @@ export default function DashboardPage() {
 
         setFuelStops(fuelStops);
         return fuelStops;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching fuel stops: ", err);
-        return [];
+        throw new Error(`Gagal mengambil data pengisian bensin: ${err.message || 'Kesalahan tidak diketahui'}`);
       }
     }
     return [];
@@ -378,9 +396,9 @@ export default function DashboardPage() {
 
         setOrders(orders);
         return orders;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching orders: ", err);
-        return [];
+        throw new Error(`Gagal mengambil data orderan: ${err.message || 'Kesalahan tidak diketahui'}`);
       }
     }
     return [];
@@ -410,9 +428,9 @@ export default function DashboardPage() {
 
         setMotorcycles(motorcycles);
         return motorcycles;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Error fetching motorcycles: ", err);
-        return [];
+        throw new Error(`Gagal mengambil data motor: ${err.message || 'Kesalahan tidak diketahui'}`);
       }
     }
     return [];
@@ -692,11 +710,213 @@ export default function DashboardPage() {
 
   if (isLoading || authIsLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-redbull-dark to-redbull-darker">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-redbull-red mx-auto"></div>
-          <p className="text-redbull-light mt-4">Memuat...</p>
-        </div>
+      <div className="min-h-screen bg-gradient-to-br from-redbull-dark to-redbull-darker text-white flex flex-col">
+        <header className="bg-redbull-darker/80 backdrop-blur-sm border-b border-redbull-red/30 py-4 px-6">
+          <div className="max-w-7xl mx-auto flex justify-between items-center">
+            <div className="flex items-center space-x-3">
+              <div className="bg-redbull-red p-3 rounded-full">
+                <div className="bg-white w-10 h-10 rounded-full flex items-center justify-center">
+                  <span className="text-redbull-dark font-bold text-lg">M</span>
+                </div>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold">Motoring</h1>
+                <p className="text-redbull-light/80 text-xs">Dashboard</p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <div className="text-right">
+                <p className="text-sm font-medium">Selamat Datang</p>
+                <p className="text-redbull-light/80 text-xs">{user?.email?.split('@')[0]}</p>
+              </div>
+              <div className="bg-redbull-red w-10 h-10 rounded-full flex items-center justify-center">
+                <span className="text-white font-bold">{user?.email?.charAt(0).toUpperCase() || 'U'}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto py-8 px-6 text-center flex-grow">
+          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-8 border border-redbull-red/30">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+              <h2 className="text-3xl font-bold text-redbull-red">Dashboard</h2>
+            </div>
+
+            {/* Filter Controls Skeleton */}
+            <div className="bg-white/5 p-4 rounded-lg border border-redbull-red/20 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <Skeleton height="40px" />
+                <Skeleton height="40px" />
+                <Skeleton height="40px" />
+              </div>
+            </div>
+
+            {/* Summary Cards Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Ringkasan</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+              </div>
+            </div>
+
+            {/* Financial Details Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Rincian Keuangan</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+                <Skeleton height="100px" />
+              </div>
+            </div>
+
+            {/* Average Fuel Price Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Rata-rata Harga Bensin</h3>
+              <Skeleton height="100px" />
+            </div>
+
+            {/* Net Income Summary Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Ringkasan Pendapatan Bersih</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Skeleton height="200px" />
+                <Skeleton height="200px" />
+              </div>
+            </div>
+
+            {/* Recent Activities Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Aktivitas Terbaru</h3>
+              <div className="grid grid-cols-1 gap-4">
+                <Skeleton height="150px" />
+                <Skeleton height="150px" />
+                <Skeleton height="150px" />
+              </div>
+            </div>
+
+            {/* Chart Section Skeleton */}
+            <div className="mb-6">
+              <h3 className="text-xl font-bold text-redbull-red mb-3">Tren Bulanan</h3>
+              <Skeleton height="200px" />
+            </div>
+          </div>
+        </main>
+
+        <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0">
+          <ul className="flex justify-around">
+            <li>
+              <a href="/dashboard" className="flex flex-col items-center text-redbull-red font-semibold">
+                <span>Dasbor</span>
+              </a>
+            </li>
+            <li>
+              <a href="/orders" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Orderan</span>
+              </a>
+            </li>
+            <li>
+              <a href="/spareparts" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Spareparts</span>
+              </a>
+            </li>
+            <li>
+              <a href="/fueling" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Isi Bensin</span>
+              </a>
+            </li>
+            <li>
+              <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Profil</span>
+              </a>
+            </li>
+          </ul>
+        </nav>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-redbull-dark to-redbull-darker text-white flex flex-col">
+        <header className="bg-redbull-darker/80 backdrop-blur-sm border-b border-redbull-red/30 py-4 px-6">
+          <div className="max-w-7xl mx-auto flex justify-between items-center">
+            <div className="flex items-center space-x-3">
+              <div className="bg-redbull-red p-3 rounded-full">
+                <div className="bg-white w-10 h-10 rounded-full flex items-center justify-center">
+                  <span className="text-redbull-dark font-bold text-lg">M</span>
+                </div>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold">Motoring</h1>
+                <p className="text-redbull-light/80 text-xs">Dashboard</p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-3">
+              <div className="text-right">
+                <p className="text-sm font-medium">Selamat Datang</p>
+                <p className="text-redbull-light/80 text-xs">{user?.email?.split('@')[0]}</p>
+              </div>
+              <div className="bg-redbull-red w-10 h-10 rounded-full flex items-center justify-center">
+                <span className="text-white font-bold">{user?.email?.charAt(0).toUpperCase() || 'U'}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto py-8 px-6 text-center flex-grow">
+          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-8 border border-redbull-red/30">
+            <div className="flex flex-col items-center justify-center py-10">
+              <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-bold text-white mb-2">Terjadi Kesalahan</h2>
+              <p className="text-redbull-light mb-6 max-w-md">{error}</p>
+              <button
+                onClick={fetchAllData}
+                className="bg-redbull-red hover:bg-redbull-lighter text-white font-bold py-2 px-6 rounded-lg transition duration-300"
+              >
+                Coba Lagi
+              </button>
+            </div>
+          </div>
+        </main>
+
+        <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0">
+          <ul className="flex justify-around">
+            <li>
+              <a href="/dashboard" className="flex flex-col items-center text-redbull-red font-semibold">
+                <span>Dasbor</span>
+              </a>
+            </li>
+            <li>
+              <a href="/orders" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Orderan</span>
+              </a>
+            </li>
+            <li>
+              <a href="/spareparts" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Spareparts</span>
+              </a>
+            </li>
+            <li>
+              <a href="/fueling" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Isi Bensin</span>
+              </a>
+            </li>
+            <li>
+              <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
+                <span>Profil</span>
+              </a>
+            </li>
+          </ul>
+        </nav>
       </div>
     );
   }
@@ -723,6 +943,9 @@ export default function DashboardPage() {
             </div>
             <div className="bg-redbull-red w-10 h-10 rounded-full flex items-center justify-center">
               <span className="text-white font-bold">{user?.email?.charAt(0).toUpperCase() || 'U'}</span>
+            </div>
+            <div>
+              <NotificationPanel />
             </div>
           </div>
         </div>
