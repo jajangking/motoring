@@ -495,12 +495,17 @@ const FloatingAIAssistant = () => {
         systemMessage += ' Tidak ada data kontekstual tambahan saat ini.';
       }
 
+      // Check if API key is available
+      if (!process.env.GROQ_API_KEY) {
+        throw new Error('GROQ API key is not configured. Please set GROQ_API_KEY in your environment variables.');
+      }
+
       // Call Groq API
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer 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`
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
         },
         body: JSON.stringify({
           messages: [
