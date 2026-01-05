@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, deleteDoc, writeBatch, limit, startAfter, QueryDocumentSnapshot } from 'firebase/firestore';
 import NotificationPanel from '@/components/NotificationPanel';
+import TabBar from '@/components/TabBar';
 
 export default function OrdersPage() {
   // Fungsi untuk mendapatkan bulan saat ini dalam format YYYY-MM
@@ -50,11 +51,7 @@ export default function OrdersPage() {
   const [exportText, setExportText] = useState(''); // State to store the export text
   const [exportFormat, setExportFormat] = useState<'basic' | 'withRupiah'>('basic'); // State for export format
   
-  // Pagination states
-  const [lastVisible, setLastVisible] = useState<QueryDocumentSnapshot | null>(null);
-  const [hasMore, setHasMore] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [pageSize] = useState(20); // Number of items per page
+  // State variables
 
   // Function to check if an order is in a closed book period
   const isOrderInClosedPeriod = (orderDate: string) => {
@@ -87,34 +84,20 @@ export default function OrdersPage() {
     });
   };
 
-  // Fetch orders and book history from Firebase with pagination
+  // Fetch orders and book history from Firebase
   const fetchOrders = async (reset: boolean = true) => {
     if (user) {
       setIsFetching(true); // Set fetching state
       try {
         console.log("Fetching orders for user:", user.uid);
-        
-        let q;
-        if (reset) {
-          // Initial fetch - get first page
-          q = query(
-            collection(db, "orders"),
-            where("userId", "==", user.uid),
-            orderBy("tanggal", "desc"),
-            limit(pageSize)
-          );
-        } else {
-          // Fetch next page
-          if (!lastVisible) return; // If no last visible document, we've reached the end
-          q = query(
-            collection(db, "orders"),
-            where("userId", "==", user.uid),
-            orderBy("tanggal", "desc"),
-            startAfter(lastVisible),
-            limit(pageSize)
-          );
-        }
-        
+
+        // Fetch all orders for the user without pagination since we have monthly/period filters
+        const q = query(
+          collection(db, "orders"),
+          where("userId", "==", user.uid),
+          orderBy("tanggal", "desc")
+        );
+
         const querySnapshot = await getDocs(q);
         console.log("Query result:", querySnapshot.size, "documents");
 
@@ -144,19 +127,8 @@ export default function OrdersPage() {
           return order;
         });
 
-        // Update last visible document for pagination
-        const lastDoc = querySnapshot.docs[querySnapshot.docs.length - 1];
-        if (reset) {
-          // Reset the list and set the first page
-          setOrders(fetchedOrders);
-          setLastVisible(lastDoc || null);
-          setHasMore(querySnapshot.size === pageSize); // If we got exactly pageSize docs, there might be more
-        } else {
-          // Append to existing list
-          setOrders(prev => [...prev, ...fetchedOrders]);
-          setLastVisible(lastDoc || null);
-          setHasMore(querySnapshot.size === pageSize); // If we got exactly pageSize docs, there might be more
-        }
+        // Set all orders
+        setOrders(fetchedOrders);
 
         // Fetch book history
         const historyQuery = query(collection(db, "bookHistory"), orderBy("startDate", "desc"));
@@ -178,18 +150,10 @@ export default function OrdersPage() {
         setError("Gagal mengambil data orderan. Silakan coba lagi.");
       } finally {
         setIsFetching(false); // Always reset fetching state
-        setIsLoadingMore(false); // Reset loading more state
       }
     }
   };
 
-  // Function to load more orders
-  const loadMoreOrders = async () => {
-    if (hasMore && !isLoadingMore) {
-      setIsLoadingMore(true);
-      await fetchOrders(false); // Fetch next page
-    }
-  };
 
   useEffect(() => {
     if (!authIsLoading) {
@@ -213,6 +177,13 @@ export default function OrdersPage() {
   useEffect(() => {
     console.log("Orders state updated:", orders);
   }, [orders]);
+
+  // Refetch orders when month or period filter changes
+  useEffect(() => {
+    if (user && !authIsLoading) {
+      fetchOrders(true);
+    }
+  }, [monthFilter, periodFilter, user, authIsLoading]);
 
   // Fetch book history when user changes or component mounts
 
@@ -465,7 +436,7 @@ export default function OrdersPage() {
   // Function to generate basic export text based on current filters
   const generateBasicExportText = () => {
     // Apply month and period filters to get displayed orders for export
-    let displayedOrders = [...filteredOrders];
+    let displayedOrders = [...orders]; // Use all orders, not just filtered ones
 
     // Apply month filter
     if (monthFilter !== 'all') {
@@ -488,6 +459,7 @@ export default function OrdersPage() {
         return date.getDate() >= 16 && date.getDate() <= 31;
       });
     }
+    // For 'all' period, no additional filtering is needed as we already have all orders for the month
 
     // Get month name for display
     const [year, month] = monthFilter.split('-').map(Number);
@@ -500,15 +472,17 @@ export default function OrdersPage() {
     // Format the export text
     let exportText = `*REKAP ANTARAN*\n`;
     exportText += `*DELIMAN HL*\n`;
-    exportText += `*${monthName} TGL ${periodFilter}*\n\n`;
+    // Format period display properly for export header
+    const periodDisplay = periodFilter === 'all' ? '1-31' : periodFilter;
+    exportText += `*${monthName} TGL ${periodDisplay}*\n\n`;
 
     exportText += `NAMA : Jajang Nurdiana\n`;
     exportText += `NIK : 3207103103000001\n`;
     exportText += `NIK DMS : 32071031\n\n`;
 
     // Create array for each day of the period
-    const daysInPeriod = periodFilter === '1-15' ? 15 : 16; // For 1-15 or 16-31
-    const startDate = periodFilter === '1-15' ? 1 : 16;
+    const daysInPeriod = periodFilter === 'all' ? 31 : (periodFilter === '1-15' ? 15 : 16); // For all, 1-15, or 16-31
+    const startDate = periodFilter === 'all' ? 1 : (periodFilter === '1-15' ? 1 : 16);
 
     // Initialize arrays for klik and paket
     const klikArray = new Array(daysInPeriod).fill(null);
@@ -519,10 +493,11 @@ export default function OrdersPage() {
       const date = new Date(order.tanggal);
       const day = date.getDate();
 
-      if ((periodFilter === '1-15' && day >= 1 && day <= 15) ||
+      if ((periodFilter === 'all') ||
+          (periodFilter === '1-15' && day >= 1 && day <= 15) ||
           (periodFilter === '16-31' && day >= 16 && day <= 31)) {
 
-        const dayIndex = periodFilter === '1-15' ? day - 1 : day - 16;
+        const dayIndex = periodFilter === 'all' ? day - 1 : (periodFilter === '1-15' ? day - 1 : day - 16);
 
         if (order.labelType === 'klik') {
           klikArray[dayIndex] = order.qty;
@@ -563,7 +538,7 @@ export default function OrdersPage() {
   // Function to generate export text with rupiah based on current filters
   const generateExportTextWithRupiah = () => {
     // Apply month and period filters to get displayed orders for export
-    let displayedOrders = [...filteredOrders];
+    let displayedOrders = [...orders]; // Use all orders, not just filtered ones
 
     // Apply month filter
     if (monthFilter !== 'all') {
@@ -586,6 +561,7 @@ export default function OrdersPage() {
         return date.getDate() >= 16 && date.getDate() <= 31;
       });
     }
+    // For 'all' period, no additional filtering is needed as we already have all orders for the month
 
     // Get month name for display
     const [year, month] = monthFilter.split('-').map(Number);
@@ -598,15 +574,17 @@ export default function OrdersPage() {
     // Format the export text
     let exportText = `*REKAP ANTARAN*\n`;
     exportText += `*DELIMAN HL*\n`;
-    exportText += `*${monthName} TGL ${periodFilter}*\n\n`;
+    // Format period display properly for export header
+    const periodDisplay = periodFilter === 'all' ? '1-31' : periodFilter;
+    exportText += `*${monthName} TGL ${periodDisplay}*\n\n`;
 
     exportText += `NAMA : Jajang Nurdiana\n`;
     exportText += `NIK : 3207103103000001\n`;
     exportText += `NIK DMS : 32071031\n\n`;
 
     // Create array for each day of the period
-    const daysInPeriod = periodFilter === '1-15' ? 15 : 16; // For 1-15 or 16-31
-    const startDate = periodFilter === '1-15' ? 1 : 16;
+    const daysInPeriod = periodFilter === 'all' ? 31 : (periodFilter === '1-15' ? 15 : 16); // For all, 1-15, or 16-31
+    const startDate = periodFilter === 'all' ? 1 : (periodFilter === '1-15' ? 1 : 16);
 
     // Initialize arrays for klik and paket
     const klikArray = new Array(daysInPeriod).fill(null);
@@ -617,10 +595,11 @@ export default function OrdersPage() {
       const date = new Date(order.tanggal);
       const day = date.getDate();
 
-      if ((periodFilter === '1-15' && day >= 1 && day <= 15) ||
+      if ((periodFilter === 'all') ||
+          (periodFilter === '1-15' && day >= 1 && day <= 15) ||
           (periodFilter === '16-31' && day >= 16 && day <= 31)) {
 
-        const dayIndex = periodFilter === '1-15' ? day - 1 : day - 16;
+        const dayIndex = periodFilter === 'all' ? day - 1 : (periodFilter === '1-15' ? day - 1 : day - 16);
 
         if (order.labelType === 'klik') {
           klikArray[dayIndex] = order.qty;
@@ -920,18 +899,6 @@ export default function OrdersPage() {
                   })}
                 </div>
                 
-                {/* Load More Button */}
-                {hasMore && (
-                  <div className="mt-6 flex justify-center">
-                    <button
-                      onClick={loadMoreOrders}
-                      disabled={isLoadingMore}
-                      className="bg-redbull-red hover:bg-redbull-lighter disabled:opacity-50 text-white font-bold py-2 px-6 rounded-lg transition duration-300"
-                    >
-                      {isLoadingMore ? 'Memuat...' : 'Muat Lebih Banyak'}
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })()}
@@ -1361,35 +1328,7 @@ export default function OrdersPage() {
         </div>
       )}
 
-      <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0 z-40">
-        <ul className="flex justify-around">
-          <li>
-            <a href="/dashboard" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Dasbor</span>
-            </a>
-          </li>
-          <li>
-            <a href="/orders" className="flex flex-col items-center text-redbull-red font-semibold">
-              <span>Orderan</span>
-            </a>
-          </li>
-          <li>
-            <a href="/spareparts" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Spareparts</span>
-            </a>
-          </li>
-          <li>
-            <a href="/fueling" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Isi Bensin</span>
-            </a>
-          </li>
-          <li>
-            <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Profil</span>
-            </a>
-          </li>
-        </ul>
-      </nav>
+      <TabBar />
     </div>
   );
 }

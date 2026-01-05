@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import TabBar from '@/components/TabBar';
 
 export default function SparepartsPage() {
   const [isLoading, setIsLoading] = useState(true);
@@ -1609,35 +1610,7 @@ export default function SparepartsPage() {
         </div>
       )}
 
-      <nav className="bg-redbull-darker/80 backdrop-blur-sm border-t border-redbull-red/30 py-3 fixed bottom-0 left-0 right-0 z-40">
-        <ul className="flex justify-around text-xs sm:text-sm">
-          <li>
-            <a href="/dashboard" className="flex flex-col items-center hover:text-redbull-red transition duration-200 py-1">
-              <span>Dasbor</span>
-            </a>
-          </li>
-          <li>
-            <a href="/orders" className="flex flex-col items-center hover:text-redbull-red transition duration-200 py-1">
-              <span>Orderan</span>
-            </a>
-          </li>
-          <li>
-            <a href="/spareparts" className="flex flex-col items-center text-redbull-red font-semibold py-1">
-              <span>Spareparts</span>
-            </a>
-          </li>
-          <li>
-            <a href="/fueling" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Isi Bensin</span>
-            </a>
-          </li>
-          <li>
-            <a href="/profile" className="flex flex-col items-center hover:text-redbull-red transition duration-200">
-              <span>Profil</span>
-            </a>
-          </li>
-        </ul>
-      </nav>
+      <TabBar />
     </div>
   );
 }

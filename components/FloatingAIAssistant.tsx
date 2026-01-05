@@ -72,30 +72,10 @@ const FloatingAIAssistant = () => {
   // Effect to handle the interactive message bubble
   useEffect(() => {
     if (!isOpen) { // Only show the bubble when chat is closed
-      const messages = [
-        "Halo! Saya asisten AI siap membantu Anda hari ini",
-        "Butuh bantuan? Saya di sini untuk Anda",
-        "Punya pertanyaan? Tanyakan pada saya",
-        "Saya bisa bantu Anda dengan laporan dan analisis",
-        "Klik saya untuk mulai berbicara dengan asisten AI",
-        "Apa yang bisa saya bantu sekarang?",
-        "Saya siap membantu Anda hari ini!",
-        "Ingin tahu sesuatu? Tanyakan saja!"
-      ];
-
-      const interval = setInterval(() => {
-        // Get a random message different from the current one
-        let newMessage;
-        do {
-          newMessage = messages[Math.floor(Math.random() * messages.length)];
-        } while (newMessage === interactiveMessage && messages.length > 1);
-
-        setInteractiveMessage(newMessage);
-      }, 8000); // Change message every 8 seconds
-
-      return () => clearInterval(interval);
+      // Set a single, professional message instead of cycling through random ones
+      setInteractiveMessage("Asisten AI Motoring - Siap membantu Anda");
     }
-  }, [isOpen, interactiveMessage]);
+  }, [isOpen]);
 
   const getContextualInfo = (path: string): string => {
     switch (path) {
@@ -202,12 +182,12 @@ const FloatingAIAssistant = () => {
         }
 
         // Add initial greeting message with contextual information
-        let initialText = `Halo! Saya adalah asisten AI yang siap membantu Anda. Anda saat ini berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
+        let initialText = `Halo! Saya adalah asisten AI Motoring. Saat ini Anda berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
 
         if (initialContextualData) {
-          initialText += ` Saya memiliki akses ke data terkini Anda. Apa yang bisa saya bantu hari ini?`;
+          initialText += ` Saya memiliki akses ke data terkini Anda. Bagaimana saya bisa membantu?`;
         } else {
-          initialText += ` Apa yang bisa saya bantu hari ini?`;
+          initialText += ` Bagaimana saya bisa membantu?`;
         }
 
         const initialMessage: Message = {
@@ -243,7 +223,7 @@ const FloatingAIAssistant = () => {
       console.error('Error initializing conversation:', error);
 
       // Fallback to initial message if there's an error
-      const initialText = `Halo! Saya adalah asisten AI yang siap membantu Anda. Anda saat ini berada di halaman: ${contextualInfo || 'Halaman Umum'}. Apa yang bisa saya bantu hari ini?`;
+      const initialText = `Halo! Saya adalah asisten AI Motoring. Saat ini Anda berada di halaman: ${contextualInfo || 'Halaman Umum'}. Bagaimana saya bisa membantu?`;
 
       const initialMessage: Message = {
         id: '1',
@@ -298,12 +278,12 @@ const FloatingAIAssistant = () => {
       }
 
       // Add initial greeting message with contextual information
-      let initialText = `Halo! Sesi baru telah dimulai. Saya adalah asisten AI yang siap membantu Anda. Anda saat ini berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
+      let initialText = `Halo! Sesi baru telah dimulai. Saya adalah asisten AI Motoring. Saat ini Anda berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
 
       if (initialContextualData) {
-        initialText += ` Saya memiliki akses ke data terkini Anda. Apa yang bisa saya bantu hari ini?`;
+        initialText += ` Saya memiliki akses ke data terkini Anda. Bagaimana saya bisa membantu?`;
       } else {
-        initialText += ` Apa yang bisa saya bantu hari ini?`;
+        initialText += ` Bagaimana saya bisa membantu?`;
       }
 
       const initialMessage: Message = {
@@ -487,7 +467,7 @@ const FloatingAIAssistant = () => {
         console.error('Error fetching contextual data:', fetchError);
       }
 
-      let systemMessage = `Anda adalah asisten AI yang membantu pengguna aplikasi motoring. Berikan jawaban yang informatif, ramah, dan relevan dengan konteks aplikasi motoring. Jawab dalam bahasa Indonesia. Gunakan konteks percakapan sebelumnya untuk memberikan jawaban yang konsisten dan kontekstual. Pengguna saat ini berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
+      let systemMessage = `Anda adalah asisten AI profesional untuk aplikasi motoring. Berikan jawaban yang informatif, ringkas, dan relevan dengan konteks aplikasi motoring. Jawab dalam bahasa Indonesia. Gunakan konteks percakapan sebelumnya untuk memberikan jawaban yang konsisten dan kontekstual. Pengguna saat ini berada di halaman: ${contextualInfo || 'Halaman Umum'}.`;
 
       if (freshContextualData) {
         systemMessage += ` Berikut adalah data kontekstual terkini dari sistem: ${JSON.stringify(freshContextualData, null, 2)}. Gunakan informasi ini untuk memberikan jawaban yang akurat dan relevan.`;
@@ -694,7 +674,7 @@ const FloatingAIAssistant = () => {
 
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
+    <div className={`${pathname !== '/' && pathname !== '/login' && pathname !== '/register' && pathname !== '/forgot-password' && pathname !== '/landing' ? 'bottom-24' : 'bottom-6'} fixed right-6 z-50`}>
       {isOpen ? (
         <div className="bg-redbull-darker/90 backdrop-blur-md rounded-xl shadow-2xl border border-redbull-red/30 w-80 h-96 flex flex-col max-w-xs">
           {/* Header */}
